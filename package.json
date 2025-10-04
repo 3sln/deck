@@ -2,6 +2,7 @@
   "name": "@3sln/reel",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "exports": {
     ".": "./src/main.js",
     "./vite-plugin": "./vite-plugin.js"
