@@ -1,0 +1,23 @@
+{
+  "name": "@3sln/reel",
+  "version": "0.0.1",
+  "private": true,
+  "exports": {
+    ".": "./src/main.js",
+    "./vite-plugin": "./vite-plugin.js"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@3sln/dodo": "link:@3sln/dodo",
+    "@3sln/bones": "link:@3sln/bones",
+    "marked": "^12.0.0",
+    "highlight.js": "^11.9.0",
+    "glob": "^10.3.10"
+  },
+  "devDependencies": {
+    "vite": "^5.1.0"
+  }
+}
