@@ -3,16 +3,164 @@ import shadowFactory from '@3sln/bones/shadow.js';
 import { css } from '@3sln/bones/css.js';
 import busFactory from '@3sln/bones/bus.js';
 import observableFactory from '@3sln/bones/observable.js';
+import { Engine, Provider, Query, Action } from '@3sln/ngin';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import githubStyle from 'highlight.js/styles/github.css?inline';
 
-const { reconcile, h, div, button, pre, code, span, label, input } = dodo;
+const { reconcile, h, div, button, pre, code, span, label, input, p } = dodo;
 const { shadow } = shadowFactory({ dodo });
 const { ObservableSubject } = busFactory({ dodo });
-const { watch } = observableFactory({ dodo });
+const { watch, zip } = observableFactory({ dodo });
 
 hljs.registerLanguage('javascript', javascript);
+
+// --- Reactive Store for Demo State ---
+class DemoState {
+    #subject;
+
+    constructor(initialState) {
+        this.#subject = new ObservableSubject(initialState);
+    }
+
+    get state$() {
+        return this.#subject;
+    }
+
+    update(updater, ...args) {
+        const currentState = this.#subject.value;
+        const newState = updater(currentState, ...args);
+        this.#subject.next(newState);
+    }
+}
+
+// --- Ngin State Definitions ---
+
+class ActivePanel extends Query {
+    static deps = ['state'];
+    boot({ state }, { notify }) {
+        let lastId = null;
+        state.state$.subscribe({
+            next: (s) => {
+                if (s.activePanelId !== lastId) {
+                    lastId = s.activePanelId;
+                    notify(lastId);
+                }
+            }
+        });
+    }
+}
+
+class SetActivePanel extends Action {
+    static deps = ['state'];
+    constructor(id) {
+        super();
+        this.id = id;
+    }
+    execute({ state }) {
+        state.update((s, id) => ({ ...s, activePanelId: id }), this.id);
+    }
+}
+
+class AllProperties extends Query {
+    static deps = ['state'];
+    boot({ state }, { notify }) {
+        let lastProps = null;
+        state.state$.subscribe({
+            next: (s) => {
+                if (s.properties !== lastProps) {
+                    lastProps = s.properties;
+                    notify(lastProps);
+                }
+            }
+        });
+    }
+}
+
+class IsPropertiesPanelVisible extends Query {
+    static deps = ['state'];
+    boot({ state }, { notify }) {
+        state.state$.subscribe({
+            next: (s) => notify(s.properties.length > 0)
+        });
+    }
+}
+
+class Property extends Query {
+    static deps = ['state'];
+    constructor(id) {
+        super();
+        this.id = id;
+    }
+    boot({ state }, { notify }) {
+        let lastValue = undefined;
+        state.state$.subscribe({
+            next: (s) => {
+                const prop = s.properties.find(p => p.id === this.id);
+                const newValue = prop?.value;
+                if (newValue !== lastValue) {
+                    lastValue = newValue;
+                    notify(newValue);
+                }
+            }
+        });
+    }
+}
+
+class SetProperty extends Action {
+    static deps = ['state'];
+    constructor(prop) {
+        super();
+        this.prop = prop;
+    }
+    execute({ state }) {
+        state.update((s, prop) => ({ 
+            ...s, 
+            properties: [...s.properties, prop] 
+        }), this.prop);
+    }
+}
+
+class UpdateProperty extends Action {
+    static deps = ['state'];
+    constructor(id, value) {
+        super();
+        this.id = id;
+        this.value = value;
+    }
+    execute({ state }) {
+        state.update((s, id, value) => ({ 
+            ...s, 
+            properties: s.properties.map(p => p.id === id ? { ...p, value } : p)
+        }), this.id, this.value);
+    }
+}
+
+class Panels extends Query {
+    static deps = ['state'];
+    boot({ state }, { notify }) {
+        let lastPanels = null;
+        state.state$.subscribe({
+            next: (s) => {
+                if (s.panels !== lastPanels) {
+                    lastPanels = s.panels;
+                    notify(lastPanels);
+                }
+            }
+        });
+    }
+}
+
+class CreatePanel extends Action {
+    static deps = ['state'];
+    constructor(panel) {
+        super();
+        this.panel = panel;
+    }
+    execute({ state }) {
+        state.update((s, panel) => ({ ...s, panels: [...s.panels, panel] }), this.panel);
+    }
+}
 
 const styles = css`
     :host {
@@ -55,160 +203,216 @@ const styles = css`
         flex-grow: 1;
         overflow: hidden;
     }
-    .panel {
-        width: 0;
-        overflow: hidden;
-        padding: 0;
-    }
     .panel.active {
-        width: 100%;
-        overflow-y: auto;
-        overflow-x: auto;
+        flex-grow: 1;
         padding: 1em;
+        overflow: hidden;
     }
-    .source pre {
+    .panel {
+        flex-grow: 0;
+        width: 0;
+        max-height: 50rem;
+        overflow: auto;
+    }
+    pre > code {
+        padding: 1em;
         margin: 0;
-    }
-    .source code.hljs {
-        padding: 1em;
         border-radius: 0;
     }
     ${githubStyle}
 `;
 
 class ReelDemo extends HTMLElement {
-    #state = { sourceCode: 'Loading...', properties: {} };
-    #activeTab$ = new ObservableSubject('Canvas');
-    #panels$ = new ObservableSubject([]);
     #demoDriver = null;
-    #canvasEl = document.createElement('div');
-    #propsEl = document.createElement('div');
-    #sourceEl = document.createElement('div');
+    #engine;
+    #idCounter = 0;
+    #sourceCode$ = new ObservableSubject('Loading...');
+
+    static get observedAttributes() {
+        return ['src', 'canonical-src'];
+    }
 
     constructor() {
         super();
         this.attachShadow({ mode: 'open' });
         this.shadowRoot.adoptedStyleSheets = [styles];
-        this.#canvasEl.className = 'panel canvas';
-        this.#propsEl.className = 'panel properties';
-        this.#sourceEl.className = 'panel source';
-    }
+        
+        const canvasEl = document.createElement('div');
+        const canvasId = this.#idCounter++;
+        const sourceId = this.#idCounter++;
+        const propsId = this.#idCounter++;
 
-    async connectedCallback() {
-        const src = this.getAttribute('src');
-        const canonicalSrc = this.getAttribute('canonical-src') || src;
-
-        if (!src) {
-            this.shadowRoot.innerHTML = 'Error: No src attribute provided.';
-            return;
-        }
-
-        try {
-            fetch(`${canonicalSrc}?raw`)
-                .then(res => res.text())
-                .then(text => {
-                    this.#state.sourceCode = text;
-                    this.#render();
-                });
-
-            const demoModule = await import(/* @vite-ignore */ src);
-
-            if (typeof demoModule.default !== 'function') {
-                throw new Error('Module does not have a default function export.');
-            }
-
-            this.#createDemoDriver();
-            this.#render();
-            demoModule.default(this.#demoDriver);
-
-        } catch (err) {
-            console.error(`Failed to load demo module from ${src}:`, err);
-            this.shadowRoot.innerHTML = `Error: Could not load demo module.`;
-        }
-    }
-
-    #createDemoDriver() {
-        this.#demoDriver = {
-            dom: this.#canvasEl,
-            panel: (name) => {
-                const currentPanels = this.#panels$.value;
-                let panel = currentPanels.find(p => p.name === name);
-                if (!panel) {
-                    const panelEl = document.createElement('div');
-                    panelEl.className = 'panel';
-                    panel = { name, el: panelEl };
-                    this.#panels$.next([...currentPanels, panel]);
+        const demoState = new DemoState({
+            activePanelId: canvasId,
+            properties: [],
+            panels: [
+                { 
+                    id: canvasId,
+                    name: 'Canvas', 
+                    render: (container) => container.replaceChildren(canvasEl)
+                },
+                { 
+                    id: sourceId,
+                    name: 'Source', 
+                    render: (container) => {
+                        reconcile(container, [
+                            watch(this.#sourceCode$, text => 
+                                pre(code({ className: 'language-javascript' }, text).on({ 
+                                    $update: (el) => { 
+                                        delete el.dataset.highlighted; 
+                                        hljs.highlightElement(el); 
+                                    }
+                                }))
+                            )
+                        ]);
+                    }
+                },
+                {
+                    id: propsId,
+                    name: 'Properties',
+                    render: (container) => {
+                        const props$ = this.#engine.query(new AllProperties());
+                        reconcile(container, [watch(props$, props => props?.map(p => this.#renderProperty(p)))]);
+                    },
+                    visibilityQuery: new IsPropertiesPanelVisible()
                 }
-                return panel.el;
+            ]
+        });
+
+        this.#engine = new Engine({
+            providers: {
+                state: Provider.fromSingleton(demoState)
+            }
+        });
+
+        this.#demoDriver = {
+            dom: canvasEl,
+            panel: (name) => {
+                const contentNode = document.createElement('div');
+                const panel = {
+                    id: this.#idCounter++,
+                    name,
+                    render: (container) => container.replaceChildren(contentNode)
+                };
+                this.#engine.dispatch(new CreatePanel(panel));
+                return contentNode;
             },
             property: (name, options) => {
-                const subject = new ObservableSubject(options.defaultValue);
-                this.#state.properties[name] = { name, options, subject };
-                this.#render();
-                return subject;
+                const id = this.#idCounter++;
+                const prop = { id, name, options };
+                this.#engine.dispatch(new SetProperty({ ...prop, value: options.defaultValue }));
+                return this.#engine.query(new Property(id));
             }
         };
     }
 
+    #fetchSource() {
+        const src = this.getAttribute('src');
+        const canonicalSrc = this.getAttribute('canonical-src') || src;
+        if (!src) return;
+
+        fetch(`${canonicalSrc}?raw`)
+            .then(res => res.text())
+            .then(text => {
+                this.#sourceCode$.next(text);
+            })
+            .catch(err => {
+                console.error(`Failed to fetch source for ${src}:`, err);
+                this.#sourceCode$.next(`// Failed to load source`);
+            });
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+        if (oldValue !== newValue) {
+            this.#fetchSource();
+        }
+    }
+
+    async connectedCallback() {
+        this.#fetchSource();
+        this.#render();
+
+        const src = this.getAttribute('src');
+        try {
+            const demoModule = await import(/* @vite-ignore */ src);
+            if (typeof demoModule.default !== 'function') {
+                throw new Error('Module does not have a default function export.');
+            }
+            demoModule.default(this.#demoDriver);
+        } catch (err) {
+            console.error(`Failed to load demo module from ${src}:`, err);
+            reconcile(this.#demoDriver.dom, h('div', { $styling: { color: 'red' } }, `Error: Could not load demo module.`));
+        }
+    }
+
+    disconnectedCallback() {
+        this.#engine.dispose();
+    }
+
     #render() {
-        const { sourceCode, properties } = this.#state;
-        const hasProperties = Object.keys(properties).length > 0;
+        const state$ = zip(
+            (activePanelId, panels) => ({ activePanelId, panels }),
+            this.#engine.query(new ActivePanel()),
+            this.#engine.query(new Panels())
+        );
 
+        const app = watch(state$, ({ activePanelId, panels }) => {
+            const renderTab = (p) => div({ className: 'tab' },
+                input({ type: 'radio', name: 'tabs', id: `tab-${p.id}`, checked: activePanelId === p.id }),
+                label({ for: `tab-${p.id}` }, p.name).on({ click: () => this.#engine.dispatch(new SetActivePanel(p.id)) })
+            );
 
-
-        const app = watch(this.#activeTab$, activeTab => watch(this.#panels$, panels => {
-            this.#canvasEl.classList.toggle('active', activeTab === 'Canvas');
-            this.#propsEl.classList.toggle('active', activeTab === 'Properties');
-            this.#sourceEl.classList.toggle('active', activeTab === 'Source');
-            panels.forEach(p => p.el.classList.toggle('active', activeTab === p.name));
-
-            const renderTab = (name) => {
-                return div({ className: 'tab' },
-                    input({ type: 'radio', name: 'tabs', id: `tab-${name}`, checked: activeTab === name }),
-                    label({ for: `tab-${name}` }, name).on({ click: () => this.#activeTab$.next(name) })
-                );
-            };
+            const renderPanelContent = (p, visible) => div({
+                $classes: ['panel', activePanelId === p.id && visible && 'active']
+            }).key(p.id).opaque().on({
+                $attach: el => p.render(el)
+            });
 
             return [
                 div({ className: 'tabs' },
-                    renderTab('Canvas'),
-                    hasProperties && renderTab('Properties'),
-                    renderTab('Source'),
-                    ...panels.map(p => renderTab(p.name))
+                    ...panels.map(p => {
+                        if (p.visibilityQuery) {
+                            return watch(this.#engine.query(p.visibilityQuery), isVisible => isVisible && renderTab(p));
+                        } else {
+                            return renderTab(p);
+                        }
+                    })
                 ),
                 div({ className: 'content-wrapper' },
-                    div().opaque().on({ $attach: el => el.appendChild(this.#canvasEl) }),
-                div({ $classes: ['panel', 'properties', activeTab === 'Properties' && 'active'] },
-                    ...Object.values(properties).map(p => this.#renderProperty(p))
-                ),
-                div({ $classes: ['panel', 'source', activeTab === 'Source' && 'active'] },
-                    pre(code({ class: 'language-javascript' }, sourceCode).on({ $update: (el) => { delete el.dataset.highlighted; hljs.highlightElement(el); } }))
-                ),
-                    ...panels.map(p => div().opaque().on({ $attach: el => el.appendChild(p.el) }))
+                    ...panels.map(p => {
+                        if (p.visibilityQuery) {
+                            return watch(this.#engine.query(p.visibilityQuery), isVisible => renderPanelContent(p, isVisible));
+                        } else {
+                            return renderPanelContent(p, true);
+                        }
+                    })
                 )
             ];
-        }));
+        }, {
+            placeholder: () => p('Loading...')
+        });
 
         reconcile(this.shadowRoot, [app]);
     }
 
     #renderProperty(prop) {
-        const { name, options, subject } = prop;
-        let control;
-        switch (options.type) {
-            case 'range':
-                control = h('input', { type: 'range', min: options.min, max: options.max, value: options.defaultValue })
-                    .on({ input: e => subject.next(e.target.value) });
-                break;
-            case 'text':
-                control = h('input', { type: 'text', value: options.defaultValue })
-                    .on({ input: e => subject.next(e.target.value) });
-                break;
-            default:
-                control = span('Unknown property type');
-        }
+        const { id, name, options } = prop;
+        
+        const control = watch(this.#engine.query(new Property(id)), value => {
+            switch (options.type) {
+                case 'range':
+                    return input({ type: 'range', min: options.min, max: options.max, value })
+                        .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.valueAsNumber)) });
+                case 'text':
+                    return input({ type: 'text', value })
+                        .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.value)) });
+                default:
+                    return span('Unknown property type');
+            }
+        });
+
         return div({ $styling: { marginBottom: '0.5em' } },
-            h('label', name),
+            label(name),
             control
         );
     }
