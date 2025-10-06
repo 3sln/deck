@@ -15,6 +15,11 @@ const { watch, zip } = observableFactory({ dodo });
 
 hljs.registerLanguage('javascript', javascript);
 
+function filterSource(text) {
+    const regex = /\s*\/\/ reel:ignore:start[\s\S]*?\/\/ reel:ignore:end\s*\n?/gm;
+    return text.replace(regex, '');
+}
+
 // --- Reactive Store for Demo State ---
 class DemoState {
     #subject;
@@ -257,7 +262,7 @@ class ReelDemo extends HTMLElement {
                     render: (container) => {
                         reconcile(container, [
                             watch(this.#sourceCode$, text => 
-                                pre(code({ className: 'language-javascript' }, text).on({ 
+                                pre(code({ className: 'language-javascript' }, filterSource(text)).on({ 
                                     $update: (el) => { 
                                         delete el.dataset.highlighted; 
                                         hljs.highlightElement(el); 
