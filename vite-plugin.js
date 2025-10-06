@@ -21,7 +21,6 @@ export default function reelPlugin(options = {}) {
 
     configureServer(viteServer) {
       server = viteServer;
-      const initialCards = getCards();
 
       server.watcher.on('all', (eventName, file) => {
         if (file.endsWith('.md') || file.endsWith('.html')) {
@@ -36,6 +35,7 @@ export default function reelPlugin(options = {}) {
 
       server.middlewares.use(async (req, res, next) => {
         if (req.url === '/') {
+          const initialCards = getCards();
           const htmlTemplate = `
             <!doctype html>
             <html lang="en">

@@ -10,9 +10,14 @@ const { zip } = observableFactory({ dodo });
 
 function transformCard(card) {
     const doc = new DOMParser().parseFromString(card.html, 'text/html');
-    const title = doc.querySelector('h1')?.textContent || card.path;
+    const h1El = doc.querySelector('h1');
+    const title = h1El?.textContent || card.path;
     const summary = doc.querySelector('p')?.textContent || '';
-    return { ...card, title, summary };
+
+    h1El?.remove();
+    const body = doc.body.innerHTML;
+
+    return { ...card, html: undefined, title, summary, body };
 }
 
 // --- App State Store ---
