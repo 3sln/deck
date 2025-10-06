@@ -1,14 +1,17 @@
 import * as dodo from '@3sln/dodo';
 import observableFactory from '@3sln/bones/observable.js';
 import { Engine } from '@3sln/ngin';
+import * as db from './db.js';
 import { 
-    stateProvider, 
+    uiStateProvider, 
     FilteredCards, 
     SelectedCard, 
     IsWideScreen, 
     SetSearchQuery, 
     SelectCard, 
-    ClearSelection 
+    ClearSelection,
+    LoadCard,
+    RemoveCard
 } from './state.js';
 import './reel-demo.js';
 
@@ -97,11 +100,10 @@ const detailView = alias((card, engine) => {
         }
     }, closeIcon()).on({ click: () => engine.dispatch(new ClearSelection()) });
 
-    // Check if the card has a meaningful title other than its path
     if (card.title !== card.path) {
         return article({
             className: 'detail-view',
-            $styling: { padding: '0 1em 1em 1em', 'overflow-y': 'auto', width: '100%', 'max-width': '1200px', 'box-sizing': 'border-box' }
+            $styling: { padding: '0 1em 1em 1em', 'overflow-y': 'auto', width: '100%', 'max-width': '1200px' }
         },
             h1({
                 $styling: {
@@ -115,9 +117,7 @@ const detailView = alias((card, engine) => {
             ),
             section({ innerHTML: card.body }).opaque()
         );
-
     } else {
-        // Fallback for cards with no h1
         return article({
             className: 'detail-view',
             $styling: {
@@ -161,17 +161,15 @@ const app = alias((engine) => {
                 'flex-direction': 'column',
                 flex: hasSelection && isWide ? '1 1 350px' : '0 0 clamp(400px, 60%, 700px)',
                 'max-width': hasSelection && isWide ? '500px' : '700px',
-                transition: 'flex 0.3s ease-in-out',
-                'padding-top': '1rem'
+                transition: 'flex 0.3s ease-in-out'
             }
         },
             searchBar(engine),
-            cardList(filteredCards, engine)
+            cardList(filteredCards || [], engine)
         );
 
         if (hasSelection) {
             if (isWide) {
-                // Split-screen view
                 return div({ $styling: { display: 'flex', height: '100vh', width: '100vw', 'align-items': 'stretch' } },
                     listView,
                     div({ $styling: { flex: '2 1 50%', display: 'flex', 'justify-content': 'center', 'overflow-x': 'auto' } },
@@ -179,28 +177,43 @@ const app = alias((engine) => {
                     )
                 );
             } else {
-                // Detail-only view
                 return detailView(selectedCard, engine);
             }
         } else {
-            // Centered List-only view
             return div({ $styling: { display: 'flex', 'justify-content': 'center', padding: '2em 0' } },
                 listView
             );
         }
     }, {
-        placeholder: () => p('Loading Reel...')
+        placeholder: () => p('Indexing cards...')
     });
 });
 
 // --- Initial Render ---
 
-export function renderReel({ target, initialCards }) {
+export async function renderReel({ target, initialCardPaths }) {
+  await db.initDB();
+
   const engine = new Engine({
       providers: {
-          state: stateProvider(initialCards)
+          state: uiStateProvider()
       }
   });
+
+  // Initial load
+  initialCardPaths.forEach(path => {
+      engine.dispatch(new LoadCard(path));
+  });
+
+  // Handle HMR
+  if (import.meta.hot) {
+      import.meta.hot.on('reel:card-changed', ({ path }) => {
+          engine.dispatch(new LoadCard(path));
+      });
+      import.meta.hot.on('reel:card-removed', ({ path }) => {
+          engine.dispatch(new RemoveCard(path));
+      });
+  }
 
   reconcile(target, [app(engine)]);
 }

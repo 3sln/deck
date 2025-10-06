@@ -12,12 +12,12 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@3sln/dodo": "link:@3sln/dodo",
     "@3sln/bones": "link:@3sln/bones",
+    "@3sln/dodo": "link:@3sln/dodo",
     "@3sln/ngin": "link:@3sln/ngin",
-    "marked": "^12.0.0",
+    "glob": "^10.3.10",
     "highlight.js": "^11.9.0",
-    "glob": "^10.3.10"
+    "marked": "^16.3.0"
   },
   "devDependencies": {
     "vite": "^5.1.0"

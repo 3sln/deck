@@ -7,13 +7,8 @@ export default function reelPlugin(options = {}) {
   const { entry, importMap = { imports: {}, scopes: {} } } = options;
   let server;
 
-  function getCards() {
-    const files = globSync('**/*.{md,html}', { ignore: 'node_modules/**' });
-    return files.map(file => {
-      const content = fs.readFileSync(file, 'utf-8');
-      const html = file.endsWith('.md') ? marked(content) : content;
-      return { path: file, html };
-    });
+  function getCardPaths() {
+    return globSync('**/*.{md,html}', { ignore: 'node_modules/**' });
   }
 
   return {
@@ -22,20 +17,36 @@ export default function reelPlugin(options = {}) {
     configureServer(viteServer) {
       server = viteServer;
 
-      server.watcher.on('all', (eventName, file) => {
-        if (file.endsWith('.md') || file.endsWith('.html')) {
-          console.log(`File changed: ${file}, re-calculating cards...`);
-          server.ws.send({
-            type: 'custom',
-            event: 'reel:cards-update',
-            data: { cards: getCards() }
-          });
+      server.watcher.on('all', (eventName, eventPath) => {
+        if (!eventPath.endsWith('.md') && !eventPath.endsWith('.html')) return;
+
+        const root = server.config.root;
+        const webPath = path.relative(root, eventPath).replace(/\\/g, '/');
+
+        switch (eventName) {
+            case 'add':
+            case 'change':
+                console.log(`Card changed: ${webPath}`);
+                server.ws.send({
+                    type: 'custom',
+                    event: 'reel:card-changed',
+                    data: { path: webPath }
+                });
+                break;
+            case 'unlink':
+                console.log(`Card removed: ${webPath}`);
+                server.ws.send({
+                    type: 'custom',
+                    event: 'reel:card-removed',
+                    data: { path: webPath }
+                });
+                break;
         }
       });
 
       server.middlewares.use(async (req, res, next) => {
         if (req.url === '/') {
-          const initialCards = getCards();
+          const initialCardPaths = getCardPaths();
           const htmlTemplate = `
             <!doctype html>
             <html lang="en">
@@ -47,7 +58,7 @@ export default function reelPlugin(options = {}) {
                   ${JSON.stringify(importMap)}
                 </script>
                 <script>
-                  window.__INITIAL_CARDS__ = ${JSON.stringify(initialCards)};
+                  window.__INITIAL_CARD_PATHS__ = ${JSON.stringify(initialCardPaths)};
                 </script>
               </head>
               <body style="margin: 0; padding: 0;">
@@ -56,7 +67,7 @@ export default function reelPlugin(options = {}) {
                   import { renderReel } from '@3sln/reel';
                   renderReel({
                     target: document.getElementById('root'),
-                    initialCards: window.__INITIAL_CARDS__
+                    initialCardPaths: window.__INITIAL_CARD_PATHS__
                   });
                 </script>
               </body>

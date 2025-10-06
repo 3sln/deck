@@ -1,33 +1,33 @@
 import { Provider, Query, Action } from '@3sln/ngin';
 import busFactory from '@3sln/bones/bus.js';
-import observableFactory from '@3sln/bones/observable.js';
 import * as dodo from '@3sln/dodo';
+import { marked } from 'marked';
+import * as db from './db.js';
 
 const { ObservableSubject } = busFactory({ dodo });
-const { zip } = observableFactory({ dodo });
 
 // --- Data Transformation ---
 
-function transformCard(card) {
-    const doc = new DOMParser().parseFromString(card.html, 'text/html');
+function transformCard(path, markdown) {
+    const html = marked(markdown);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
     const h1El = doc.querySelector('h1');
-    const title = h1El?.textContent || card.path;
+    const title = h1El?.textContent || path;
     const summary = doc.querySelector('p')?.textContent || '';
 
     h1El?.remove();
     const body = doc.body.innerHTML;
 
-    return { ...card, html: undefined, title, summary, body };
+    return { path, title, summary, body };
 }
 
-// --- App State Store ---
+// --- UI State Store ---
 
-class AppState {
+class UIState {
     #subject;
 
     constructor(initialState) {
         this.#subject = new ObservableSubject(initialState);
-        this.#listenForHmr();
     }
 
     get state$() {
@@ -39,38 +39,19 @@ class AppState {
         const newState = updater(currentState, ...args);
         this.#subject.next(newState);
     }
-
-    #listenForHmr() {
-        if (import.meta.hot) {
-            import.meta.hot.on('reel:cards-update', (data) => {
-                console.log('Card list changed via HMR, updating state...');
-                const transformedCards = data.cards.map(transformCard);
-                this.update(s => ({ ...s, allCards: transformedCards }));
-            });
-        }
-    }
 }
 
 // --- Ngin Components ---
 
-export const stateProvider = (initialCards) => {
-    const transformedCards = initialCards.map(transformCard);
-    const appState = new AppState({ 
-        allCards: transformedCards,
+export const uiStateProvider = () => {
+    const uiState = new UIState({ 
         query: '',
         selectedCardPath: null,
     });
-    return Provider.fromSingleton(appState);
+    return Provider.fromSingleton(uiState);
 };
 
 // --- Queries ---
-
-export class AllCards extends Query {
-    static deps = ['state'];
-    boot({ state }, { notify }) {
-        state.state$.subscribe(s => notify(s.allCards));
-    }
-}
 
 export class SearchQuery extends Query {
     static deps = ['state'];
@@ -81,39 +62,51 @@ export class SearchQuery extends Query {
 
 export class FilteredCards extends Query {
     static deps = ['state'];
-    boot({ state }, { notify }) {
-        let lastCards = null;
-        let lastQuery = null;
+    boot({ state }, { notify, engineFeed }) {
+        let currentQuery = null;
 
+        const reQuery = async () => {
+            const cards = currentQuery 
+                ? await db.findCardsByQuery(currentQuery) 
+                : await db.getRecentCards(100);
+            notify(cards);
+        };
+
+        engineFeed.addEventListener('card-loaded', reQuery);
+        engineFeed.addEventListener('card-removed', reQuery);
+        
         state.state$.subscribe(s => {
-            if (s.allCards !== lastCards || s.query !== lastQuery) {
-                lastCards = s.allCards;
-                lastQuery = s.query;
-
-                if (!lastQuery) {
-                    notify(lastCards);
-                    return;
-                }
-                const lowerQuery = lastQuery.toLowerCase();
-                const filtered = lastCards.filter(card => 
-                    card.path.toLowerCase().includes(lowerQuery) || 
-                    card.title.toLowerCase().includes(lowerQuery) ||
-                    card.summary.toLowerCase().includes(lowerQuery)
-                );
-                notify(filtered);
+            if (s.query !== currentQuery) {
+                currentQuery = s.query;
+                reQuery();
             }
         });
+
+        reQuery(); // Initial query
     }
 }
 
 export class SelectedCard extends Query {
     static deps = ['state'];
-    boot({ state }, { notify }) {
-        state.state$.subscribe(s => {
-            const card = s.selectedCardPath 
-                ? s.allCards.find(c => c.path === s.selectedCardPath) 
-                : null;
+    boot({ state }, { notify, engineFeed }) {
+        let currentPath = null;
+
+        // React to selection changes from UI
+        state.state$.subscribe(async s => {
+            currentPath = s.selectedCardPath;
+            if (!currentPath) {
+                notify(null);
+                return;
+            }
+            const card = await db.getCard(currentPath);
             notify(card);
+        });
+
+        // React to HMR updates for the currently selected card
+        engineFeed.addEventListener('card-loaded', (event) => {
+            if (event.detail.card.path === currentPath) {
+                notify(event.detail.card);
+            }
         });
     }
 }
@@ -132,6 +125,39 @@ export class IsWideScreen extends Query {
 }
 
 // --- Actions ---
+
+export class LoadCard extends Action {
+    constructor(path) {
+        super();
+        this.path = path;
+    }
+    async execute(_, { engineFeed }) {
+        const fetchTime = Date.now();
+        try {
+            const res = await fetch(`/${this.path}`);
+            if (!res.ok) throw new Error(`Failed to fetch ${this.path}: ${res.statusText}`);
+            const markdown = await res.text();
+            const card = transformCard(this.path, markdown);
+            const newCard = await db.upsertCard(card, fetchTime);
+            if (newCard) {
+                engineFeed.dispatchEvent(new CustomEvent('card-loaded', { detail: { card: newCard } }));
+            }
+        } catch (err) {
+            console.error(`Failed to load card ${this.path}:`, err);
+        }
+    }
+}
+
+export class RemoveCard extends Action {
+    constructor(path) {
+        super();
+        this.path = path;
+    }
+    async execute(_, { engineFeed }) {
+        await db.removeCard(this.path);
+        engineFeed.dispatchEvent(new CustomEvent('card-removed', { detail: { path: this.path } }));
+    }
+}
 
 export class SetSearchQuery extends Action {
     static deps = ['state'];
