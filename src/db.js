@@ -1,5 +1,5 @@
 const DB_NAME = 'reel-db';
-const DB_VERSION = 2; // Bump version for schema change
+const DB_VERSION = 3; // Bump version for schema change
 const CARDS_STORE = 'cards';
 const INDEX_STORE = 'searchIndex';
 
@@ -29,6 +29,9 @@ function initDB() {
 
             if (!cardsStore.indexNames.contains('by-updatedAt')) {
                 cardsStore.createIndex('by-updatedAt', 'updatedAt');
+            }
+            if (!cardsStore.indexNames.contains('by-usedAt')) {
+                cardsStore.createIndex('by-usedAt', 'usedAt');
             }
 
             if (!db.objectStoreNames.contains(INDEX_STORE)) {
@@ -73,7 +76,8 @@ async function upsertCard(card, fetchTime) {
         await Promise.all(oldIndexKeys.map(key => promisifyRequest(indexStore.delete(key))));
     }
 
-    const newCard = { ...card, updatedAt: Date.now() };
+    const now = Date.now();
+    const newCard = { ...card, updatedAt: now, usedAt: existing?.usedAt || now };
     const titleTokens = tokenize(newCard.title);
     const summaryTokens = tokenize(newCard.summary);
     const bodyText = getTextContent(newCard.body);
@@ -164,7 +168,7 @@ async function findCardsByQuery(query, limit = 100) {
             .slice(0, limit);
         
         const cards = await Promise.all(sortedPaths.map(path => promisifyRequest(cardsStore.get(path))));
-        return cards.filter(Boolean);
+        return cards.filter(Boolean).sort((a, b) => b.usedAt - a.usedAt);
     }
 
     // Fallback to aggregated word-by-word distance search
@@ -207,7 +211,12 @@ async function findCardsByQuery(query, limit = 100) {
 
     return cardScores
         .filter(item => item.score > 0)
-        .sort((a, b) => b.score - a.score)
+        .sort((a, b) => {
+            if (b.score !== a.score) {
+                return b.score - a.score;
+            }
+            return b.card.usedAt - a.card.usedAt;
+        })
         .slice(0, 20)
         .map(item => item.card);
 }
@@ -216,7 +225,7 @@ async function getRecentCards(limit = 100) {
     const db = await initDB();
     return new Promise((resolve, reject) => {
         const tx = db.transaction(CARDS_STORE, 'readonly');
-        const index = tx.objectStore(CARDS_STORE).index('by-updatedAt');
+        const index = tx.objectStore(CARDS_STORE).index('by-usedAt');
         const request = index.openCursor(null, 'prev');
 
         const results = [];
@@ -242,4 +251,37 @@ async function getCard(path) {
     return await promisifyRequest(db.transaction(CARDS_STORE).objectStore(CARDS_STORE).get(path));
 }
 
-export { initDB, upsertCard, removeCard, findCardsByQuery, getRecentCards, getCard };
+async function touchCard(path) {
+    const db = await initDB();
+    const tx = db.transaction(CARDS_STORE, 'readwrite');
+    const store = tx.objectStore(CARDS_STORE);
+    const card = await promisifyRequest(store.get(path));
+    if (card) {
+        card.usedAt = Date.now();
+        await promisifyRequest(store.put(card));
+    }
+}
+
+async function pruneCards(livePaths) {
+    const db = await initDB();
+    const tx = db.transaction([CARDS_STORE, INDEX_STORE], 'readwrite');
+    const cardsStore = tx.objectStore(CARDS_STORE);
+    const indexStore = tx.objectStore(INDEX_STORE);
+    const pathIndex = indexStore.index('by-path');
+
+    const dbPaths = await promisifyRequest(cardsStore.getAllKeys());
+    const livePathsSet = new Set(livePaths);
+    
+    const stalePaths = dbPaths.filter(path => !livePathsSet.has(path));
+    if (stalePaths.length === 0) return;
+
+    console.log(`Pruning ${stalePaths.length} stale cards...`);
+
+    for (const path of stalePaths) {
+        const indexKeysToDelete = await promisifyRequest(pathIndex.getAllKeys(IDBKeyRange.only(path)));
+        await Promise.all(indexKeysToDelete.map(key => promisifyRequest(indexStore.delete(key))));
+        await promisifyRequest(cardsStore.delete(path));
+    }
+}
+
+export { initDB, upsertCard, removeCard, findCardsByQuery, getRecentCards, getCard, pruneCards, touchCard };

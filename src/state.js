@@ -74,6 +74,7 @@ export class FilteredCards extends Query {
 
         engineFeed.addEventListener('card-loaded', reQuery);
         engineFeed.addEventListener('card-removed', reQuery);
+        engineFeed.addEventListener('cards-pruned', reQuery);
         
         state.state$.subscribe(s => {
             if (s.query !== currentQuery) {
@@ -176,7 +177,8 @@ export class SelectCard extends Action {
         super();
         this.cardPath = cardPath;
     }
-    execute({ state }) {
+    async execute({ state }) {
+        await db.touchCard(this.cardPath);
         state.update(s => ({ ...s, selectedCardPath: this.cardPath }));
     }
 }
@@ -185,5 +187,16 @@ export class ClearSelection extends Action {
     static deps = ['state'];
     execute({ state }) {
         state.update(s => ({ ...s, selectedCardPath: null }));
+    }
+}
+
+export class PruneCards extends Action {
+    constructor(livePaths) {
+        super();
+        this.livePaths = livePaths;
+    }
+    async execute(_, { engineFeed }) {
+        await db.pruneCards(this.livePaths);
+        engineFeed.dispatchEvent(new CustomEvent('cards-pruned'));
     }
 }

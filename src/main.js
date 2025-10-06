@@ -11,7 +11,8 @@ import {
     SelectCard, 
     ClearSelection,
     LoadCard,
-    RemoveCard
+    RemoveCard,
+    PruneCards
 } from './state.js';
 import './reel-demo.js';
 
@@ -21,12 +22,12 @@ const { watch, zip } = observableFactory({ dodo });
 
 // --- UI Components ---
 
-const closeIcon = () => h('svg', { 
+const closeIcon = () => h('svg', {
     xmlns: 'http://www.w3.org/2000/svg', 
     height: '24px', 
     viewBox: '0 0 24 24', 
     width: '24px', 
-    fill: '#555' 
+    fill: 'var(--text-color)' 
 }, 
     h('path', { d: 'M0 0h24v24H0z', fill: 'none' }),
     h('path', { d: 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z' })
@@ -41,7 +42,9 @@ const searchBar = alias((engine) => {
                 width: '100%', 
                 padding: '0.75em 1em', 
                 'font-size': '1.1em', 
-                border: '1px solid #ddd', 
+                border: '1px solid var(--input-border)', 
+                'background-color': 'var(--input-bg)',
+                color: 'var(--text-color)',
                 'border-radius': '2em',
                 outline: 'none',
                 transition: 'box-shadow 0.2s'
@@ -60,7 +63,8 @@ const cardListItem = alias((card, engine) => {
         className: 'card-list-item',
         $styling: { 
             padding: '1em', 
-            border: '1px solid #eee',
+            border: '1px solid var(--border-color)',
+            'background-color': 'var(--card-bg)',
             'border-radius': '8px',
             cursor: 'pointer',
             transition: 'background-color 0.2s'
@@ -70,8 +74,8 @@ const cardListItem = alias((card, engine) => {
       p({ $styling: { margin: 0, color: '#666', 'font-size': '0.9em' } }, card.summary)
     ).on({
         click: () => engine.dispatch(new SelectCard(card.path)),
-        mouseover: (e) => e.currentTarget.style.backgroundColor = '#f9f9f9',
-        mouseout: (e) => e.currentTarget.style.backgroundColor = 'transparent'
+        mouseover: (e) => e.currentTarget.style.backgroundColor = 'var(--card-hover-bg)',
+        mouseout: (e) => e.currentTarget.style.backgroundColor = 'var(--card-bg)'
     });
 });
 
@@ -161,7 +165,8 @@ const app = alias((engine) => {
                 'flex-direction': 'column',
                 flex: hasSelection && isWide ? '1 1 350px' : '0 0 clamp(400px, 60%, 700px)',
                 'max-width': hasSelection && isWide ? '500px' : '700px',
-                transition: 'flex 0.3s ease-in-out'
+                transition: 'flex 0.3s ease-in-out',
+                'padding-top': '1rem'
             }
         },
             searchBar(engine),
@@ -188,7 +193,6 @@ const app = alias((engine) => {
         placeholder: () => p('Indexing cards...')
     });
 });
-
 // --- Initial Render ---
 
 export async function renderReel({ target, initialCardPaths }) {
@@ -204,6 +208,7 @@ export async function renderReel({ target, initialCardPaths }) {
   initialCardPaths.forEach(path => {
       engine.dispatch(new LoadCard(path));
   });
+  engine.dispatch(new PruneCards(initialCardPaths));
 
   // Handle HMR
   if (import.meta.hot) {

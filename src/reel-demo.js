@@ -7,6 +7,7 @@ import { Engine, Provider, Query, Action } from '@3sln/ngin';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import githubStyle from 'highlight.js/styles/github.css?inline';
+import githubDarkStyle from 'highlight.js/styles/github-dark.css?inline';
 
 const { reconcile, h, div, button, pre, code, span, label, input, p } = dodo;
 const { shadow } = shadowFactory({ dodo });
@@ -170,38 +171,42 @@ class CreatePanel extends Action {
 const styles = css`
     :host {
         display: block;
-        border: 1px solid #ccc;
+        border: 1px solid var(--border-color);
         border-radius: 4px;
         margin-bottom: 1em;
         max-height: 600px;
         display: flex;
         flex-direction: column;
+        background-color: var(--card-bg);
     }
     .tabs {
         display: flex;
-        border-bottom: 1px solid #ccc;
+        border-bottom: 1px solid var(--border-color);
         flex-shrink: 0;
     }
     .tab label {
         padding: 10px 16px;
         cursor: pointer;
-        border-right: 1px solid #ccc;
-        background: #f0f0f0;
-        color: #666;
-        transition: background 0.2s, color 0.2s;
+        border-right: 1px solid var(--border-color);
+        background: var(--bg-color);
+        color: var(--text-color);
+        opacity: 0.7;
+        transition: background 0.2s, color 0.2s, opacity 0.2s;
         display: block;
     }
     .tab input[type="radio"] {
         display: none;
     }
     .tab input[type="radio"]:checked + label {
-        background: #fff;
-        color: #000;
-        border-bottom: 1px solid #fff;
+        background: var(--card-bg);
+        color: var(--text-color);
+        opacity: 1;
+        border-bottom: 1px solid var(--card-bg);
         margin-bottom: -1px;
     }
     .tab label:hover {
-        background: #e9e9e9;
+        background: var(--card-hover-bg);
+        opacity: 1;
     }
     .content-wrapper {
         display: flex;
@@ -224,7 +229,14 @@ const styles = css`
         margin: 0;
         border-radius: 0;
     }
+
+    /* Light Theme */
     ${githubStyle}
+
+    /* Dark Theme */
+    @media (prefers-color-scheme: dark) {
+        ${githubDarkStyle}
+    }
 `;
 
 class ReelDemo extends HTMLElement {
