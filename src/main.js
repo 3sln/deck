@@ -101,7 +101,7 @@ const detailView = alias((card, engine) => {
     if (card.title !== card.path) {
         return article({
             className: 'detail-view',
-            $styling: { padding: '0 1em 1em 1em', 'overflow-y': 'auto', width: '100%', 'max-width': '1200px' }
+            $styling: { padding: '0 1em 1em 1em', 'overflow-y': 'auto', width: '100%', 'max-width': '1200px', 'box-sizing': 'border-box' }
         },
             h1({
                 $styling: {
@@ -161,7 +161,8 @@ const app = alias((engine) => {
                 'flex-direction': 'column',
                 flex: hasSelection && isWide ? '1 1 350px' : '0 0 clamp(400px, 60%, 700px)',
                 'max-width': hasSelection && isWide ? '500px' : '700px',
-                transition: 'flex 0.3s ease-in-out'
+                transition: 'flex 0.3s ease-in-out',
+                'padding-top': '1rem'
             }
         },
             searchBar(engine),

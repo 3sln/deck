@@ -50,7 +50,7 @@ export default function reelPlugin(options = {}) {
                   window.__INITIAL_CARDS__ = ${JSON.stringify(initialCards)};
                 </script>
               </head>
-              <body>
+              <body style="margin: 0; padding: 0;">
                 <div id="root"></div>
                 <script type="module">
                   import { renderReel } from '@3sln/reel';
