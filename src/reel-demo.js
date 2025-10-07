@@ -1,8 +1,8 @@
 import * as dodo from '@3sln/dodo';
-import shadowFactory from '@3sln/bones/shadow.js';
-import { css } from '@3sln/bones/css.js';
-import busFactory from '@3sln/bones/bus.js';
-import observableFactory from '@3sln/bones/observable.js';
+import shadowFactory from '@3sln/bones/shadow';
+import { css } from '@3sln/bones/css';
+import busFactory from '@3sln/bones/bus';
+import observableFactory from '@3sln/bones/observable';
 import { Engine, Provider, Query, Action } from '@3sln/ngin';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';

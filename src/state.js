@@ -1,5 +1,5 @@
 import { Provider, Query, Action } from '@3sln/ngin';
-import busFactory from '@3sln/bones/bus.js';
+import busFactory from '@3sln/bones/bus';
 import * as dodo from '@3sln/dodo';
 import { marked } from 'marked';
 import * as db from './db.js';

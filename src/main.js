@@ -1,5 +1,5 @@
 import * as dodo from '@3sln/dodo';
-import observableFactory from '@3sln/bones/observable.js';
+import observableFactory from '@3sln/bones/observable';
 import { Engine } from '@3sln/ngin';
 import * as db from './db.js';
 import { 
