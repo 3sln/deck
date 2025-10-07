@@ -3,6 +3,7 @@ import shadowFactory from '@3sln/bones/shadow';
 import { css } from '@3sln/bones/css';
 import busFactory from '@3sln/bones/bus';
 import observableFactory from '@3sln/bones/observable';
+import resizeFactory from '@3sln/bones/resize';
 import { Engine, Provider, Query, Action } from '@3sln/ngin';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -12,7 +13,8 @@ import githubDarkStyle from 'highlight.js/styles/github-dark.css?inline';
 const { reconcile, h, div, button, pre, code, span, label, input, p } = dodo;
 const { shadow } = shadowFactory({ dodo });
 const { ObservableSubject } = busFactory({ dodo });
-const { watch, zip } = observableFactory({ dodo });
+const { watch, zip, map, dedup } = observableFactory({ dodo });
+const { withContainerSize } = resizeFactory({ dodo });
 
 hljs.registerLanguage('javascript', javascript);
 
@@ -24,148 +26,144 @@ function filterSource(text) {
 // --- Reactive Store for Demo State ---
 class DemoState {
     #subject;
-
-    constructor(initialState) {
-        this.#subject = new ObservableSubject(initialState);
-    }
-
-    get state$() {
-        return this.#subject;
-    }
-
+    constructor(initialState) { this.#subject = new ObservableSubject(initialState); }
+    get state$() { return this.#subject; }
     update(updater, ...args) {
         const currentState = this.#subject.value;
-        const newState = updater(currentState, ...args);
-        this.#subject.next(newState);
+        this.#subject.next(updater(currentState, ...args));
     }
 }
 
 // --- Ngin State Definitions ---
 
-class ActivePanel extends Query {
+class ActivePanelForPane extends Query {
     static deps = ['state'];
+    #sub;
+    constructor(pane) { super(); this.pane = pane; }
+    get id() { return this.pane; }
     boot({ state }, { notify }) {
         let lastId = null;
-        state.state$.subscribe({
-            next: (s) => {
-                if (s.activePanelId !== lastId) {
-                    lastId = s.activePanelId;
-                    notify(lastId);
-                }
+        this.#sub = state.state$.subscribe(s => {
+            const newId = s.activePanelIds[this.pane];
+            if (newId !== lastId) {
+                lastId = newId;
+                notify(lastId);
             }
         });
     }
+    kill() { this.#sub?.unsubscribe(); }
 }
 
 class SetActivePanel extends Action {
     static deps = ['state'];
-    constructor(id) {
-        super();
-        this.id = id;
-    }
+    constructor(pane, id) { super(); this.pane = pane; this.id = id; }
     execute({ state }) {
-        state.update((s, id) => ({ ...s, activePanelId: id }), this.id);
+        state.update((s, pane, id) => ({
+            ...s,
+            activePanelIds: { ...s.activePanelIds, [pane]: id }
+        }), this.pane, this.id);
     }
 }
 
-class AllProperties extends Query {
+class AllPropertyIds extends Query {
     static deps = ['state'];
+    #sub;
     boot({ state }, { notify }) {
-        let lastProps = null;
-        state.state$.subscribe({
-            next: (s) => {
-                if (s.properties !== lastProps) {
-                    lastProps = s.properties;
-                    notify(lastProps);
-                }
+        let lastIds = [];
+        this.#sub = state.state$.subscribe(s => {
+            const ids = s.properties.map(p => p.id);
+            if (ids.length !== lastIds.length || ids.some((id, i) => id !== lastIds[i])) {
+                lastIds = ids;
+                notify(ids);
             }
         });
     }
+    kill() { this.#sub?.unsubscribe(); }
+}
+
+class PropertySpec extends Query {
+    static deps = ['state'];
+    #sub;
+    constructor(id) { super(); this.id = id; }
+    boot({ state }, { notify }) {
+        let lastProp = null;
+        this.#sub = state.state$.subscribe(s => {
+            const prop = s.properties.find(p => p.id === this.id);
+            if (prop?.name !== lastProp?.name || prop?.options !== lastProp?.options) {
+                const spec = prop ? { id: prop.id, name: prop.name, options: prop.options } : null;
+                lastProp = prop;
+                notify(spec);
+            }
+        });
+    }
+    kill() { this.#sub?.unsubscribe(); }
+}
+
+class PropertyValue extends Query {
+    static deps = ['state'];
+    #sub;
+    constructor(id) { super(); this.id = id; }
+    boot({ state }, { notify }) {
+        let lastValue = undefined;
+        this.#sub = state.state$.subscribe(s => {
+            const prop = s.properties.find(p => p.id === this.id);
+            const newValue = prop?.value;
+            if (newValue !== lastValue) {
+                lastValue = newValue;
+                notify(newValue);
+            }
+        });
+    }
+    kill() { this.#sub?.unsubscribe(); }
 }
 
 class IsPropertiesPanelVisible extends Query {
     static deps = ['state'];
+    #sub;
     boot({ state }, { notify }) {
-        state.state$.subscribe({
-            next: (s) => notify(s.properties.length > 0)
-        });
-    }
-}
-
-class Property extends Query {
-    static deps = ['state'];
-    constructor(id) {
-        super();
-        this.id = id;
-    }
-    boot({ state }, { notify }) {
-        let lastValue = undefined;
-        state.state$.subscribe({
-            next: (s) => {
-                const prop = s.properties.find(p => p.id === this.id);
-                const newValue = prop?.value;
-                if (newValue !== lastValue) {
-                    lastValue = newValue;
-                    notify(newValue);
-                }
+        let lastVisible = null;
+        this.#sub = state.state$.subscribe(s => {
+            const isVisible = s.properties.length > 0;
+            if (isVisible !== lastVisible) {
+                lastVisible = isVisible;
+                notify(isVisible);
             }
         });
     }
+    kill() { this.#sub?.unsubscribe(); }
 }
 
 class SetProperty extends Action {
     static deps = ['state'];
-    constructor(prop) {
-        super();
-        this.prop = prop;
-    }
-    execute({ state }) {
-        state.update((s, prop) => ({ 
-            ...s, 
-            properties: [...s.properties, prop] 
-        }), this.prop);
-    }
+    constructor(prop) { super(); this.prop = prop; }
+    execute({ state }) { state.update((s, prop) => ({ ...s, properties: [...s.properties, prop] }), this.prop); }
 }
 
 class UpdateProperty extends Action {
     static deps = ['state'];
-    constructor(id, value) {
-        super();
-        this.id = id;
-        this.value = value;
-    }
-    execute({ state }) {
-        state.update((s, id, value) => ({ 
-            ...s, 
-            properties: s.properties.map(p => p.id === id ? { ...p, value } : p)
-        }), this.id, this.value);
-    }
+    constructor(id, value) { super(); this.id = id; this.value = value; }
+    execute({ state }) { state.update((s, id, value) => ({ ...s, properties: s.properties.map(p => p.id === id ? { ...p, value } : p) }), this.id, this.value); }
 }
 
 class Panels extends Query {
     static deps = ['state'];
+    #sub;
     boot({ state }, { notify }) {
         let lastPanels = null;
-        state.state$.subscribe({
-            next: (s) => {
-                if (s.panels !== lastPanels) {
-                    lastPanels = s.panels;
-                    notify(lastPanels);
-                }
+        this.#sub = state.state$.subscribe(s => {
+            if (s.panels !== lastPanels) {
+                lastPanels = s.panels;
+                notify(lastPanels);
             }
         });
     }
+    kill() { this.#sub?.unsubscribe(); }
 }
 
 class CreatePanel extends Action {
     static deps = ['state'];
-    constructor(panel) {
-        super();
-        this.panel = panel;
-    }
-    execute({ state }) {
-        state.update((s, panel) => ({ ...s, panels: [...s.panels, panel] }), this.panel);
-    }
+    constructor(panel) { super(); this.panel = panel; }
+    execute({ state }) { state.update((s, panel) => ({ ...s, panels: [...s.panels, panel] }), this.panel); }
 }
 
 const styles = css`
@@ -174,10 +172,21 @@ const styles = css`
         border: 1px solid var(--border-color);
         border-radius: 4px;
         margin-bottom: 1em;
-        max-height: 600px;
+        max-height: 50rem;
+        display: flex;
+        background-color: var(--card-bg);
+    }
+    * {
+      box-sizing: border-box;
+    }
+    .pane {
         display: flex;
         flex-direction: column;
-        background-color: var(--card-bg);
+        border-right: 1px solid var(--border-color);
+        min-width: 0;
+    }
+    .pane:last-child {
+        border-right: none;
     }
     .tabs {
         display: flex;
@@ -212,22 +221,57 @@ const styles = css`
         display: flex;
         flex-grow: 1;
         overflow: hidden;
+        padding: 1rem;
     }
-    .panel.active {
-        flex-grow: 1;
-        padding: 1em;
+    .panel-content {
         overflow: hidden;
+        width: 0px;
+        pointer-events: none;
     }
-    .panel {
-        flex-grow: 0;
-        width: 0;
-        max-height: 50rem;
-        overflow: auto;
+    .panel-content.active {
+      pointer-events: auto;
+      width: auto;
+      overflow: auto;
     }
     pre > code {
         padding: 1em;
         margin: 0;
         border-radius: 0;
+    }
+    .properties {
+        display: flex;
+        flex-direction: column;
+        flex-wrap: wrap;
+        gap: 0 2em;
+        overflow-x: auto;
+    }
+    .property-item {
+        display: flex;
+        align-items: center;
+        gap: 1em;
+        margin-bottom: 0.75em;
+        width: 250px;
+    }
+    .property-label {
+        flex: 1;
+        text-align: right;
+        font-size: 0.9em;
+        color: var(--text-color);
+        opacity: 0.8;
+    }
+    .property-item input {
+        flex: 2;
+        flex-grow: 0;
+    }
+    input[type="text"] {
+        background: rgba(0,0,0,0.1);
+        border: 1px solid var(--input-border);
+        border-radius: 4px;
+        padding: 0.5em;
+        color: var(--text-color);
+    }
+    input[type="range"] {
+        accent-color: var(--link-color);
     }
 
     /* Light Theme */
@@ -245,9 +289,8 @@ class ReelDemo extends HTMLElement {
     #idCounter = 0;
     #sourceCode$ = new ObservableSubject('Loading...');
 
-    static get observedAttributes() {
-        return ['src', 'canonical-src'];
-    }
+    static #srcLoadSeq = 0;
+    static get observedAttributes() { return ['src', 'canonical-src']; } 
 
     constructor() {
         super();
@@ -260,57 +303,32 @@ class ReelDemo extends HTMLElement {
         const propsId = this.#idCounter++;
 
         const demoState = new DemoState({
-            activePanelId: canvasId,
+            activePanelIds: { left: canvasId, right: propsId },
             properties: [],
             panels: [
-                { 
-                    id: canvasId,
-                    name: 'Canvas', 
-                    render: (container) => container.replaceChildren(canvasEl)
-                },
-                { 
-                    id: sourceId,
-                    name: 'Source', 
-                    render: (container) => {
-                        reconcile(container, [
-                            watch(this.#sourceCode$, text => 
-                                pre(code({ className: 'language-javascript' }, filterSource(text)).on({ 
-                                    $update: (el) => { 
-                                        delete el.dataset.highlighted; 
-                                        hljs.highlightElement(el); 
-                                    }
-                                }))
-                            )
-                        ]);
-                    }
-                },
-                {
-                    id: propsId,
-                    name: 'Properties',
-                    render: (container) => {
-                        const props$ = this.#engine.query(new AllProperties());
-                        reconcile(container, [watch(props$, props => props?.map(p => this.#renderProperty(p)))]);
-                    },
-                    visibilityQuery: new IsPropertiesPanelVisible()
-                }
+                { id: canvasId, name: 'Canvas', pane: 'left', render: c => c.replaceChildren(canvasEl) },
+                { id: sourceId, name: 'Source', pane: 'right', render: c => {
+                    reconcile(c, [watch(this.#sourceCode$, text => 
+                        pre(code({ className: 'language-javascript' }, filterSource(text)).on({
+                            $update: el => { delete el.dataset.highlighted; hljs.highlightElement(el); }
+                        }))
+                    )]);
+                }},
+                { id: propsId, name: 'Properties', pane: 'right', render: c => {
+                    c.classList.add('properties');
+                    const propIds$ = this.#engine.query(new AllPropertyIds());
+                    reconcile(c, [watch(propIds$, ids => ids?.map(id => this.#propertyControl(id).key(id)))]);
+                }, visibilityQuery: new IsPropertiesPanelVisible() }
             ]
         });
 
-        this.#engine = new Engine({
-            providers: {
-                state: Provider.fromSingleton(demoState)
-            }
-        });
+        this.#engine = new Engine({ providers: { state: Provider.fromSingleton(demoState) } });
 
         this.#demoDriver = {
             dom: canvasEl,
-            panel: (name) => {
+            panel: (name, { pane = 'left' } = {}) => {
                 const contentNode = document.createElement('div');
-                const panel = {
-                    id: this.#idCounter++,
-                    name,
-                    render: (container) => container.replaceChildren(contentNode)
-                };
+                const panel = { id: this.#idCounter++, name, pane, render: c => c.replaceChildren(contentNode) };
                 this.#engine.dispatch(new CreatePanel(panel));
                 return contentNode;
             },
@@ -318,7 +336,7 @@ class ReelDemo extends HTMLElement {
                 const id = this.#idCounter++;
                 const prop = { id, name, options };
                 this.#engine.dispatch(new SetProperty({ ...prop, value: options.defaultValue }));
-                return this.#engine.query(new Property(id));
+                return this.#engine.query(new PropertyValue(id));
             }
         };
     }
@@ -330,9 +348,7 @@ class ReelDemo extends HTMLElement {
 
         fetch(`${canonicalSrc}?raw`)
             .then(res => res.text())
-            .then(text => {
-                this.#sourceCode$.next(text);
-            })
+            .then(text => this.#sourceCode$.next(text))
             .catch(err => {
                 console.error(`Failed to fetch source for ${src}:`, err);
                 this.#sourceCode$.next(`// Failed to load source`);
@@ -340,9 +356,7 @@ class ReelDemo extends HTMLElement {
     }
 
     attributeChangedCallback(name, oldValue, newValue) {
-        if (oldValue !== newValue) {
-            this.#fetchSource();
-        }
+        if (oldValue !== newValue) this.#fetchSource();
     }
 
     async connectedCallback() {
@@ -351,7 +365,10 @@ class ReelDemo extends HTMLElement {
 
         const src = this.getAttribute('src');
         try {
-            const demoModule = await import(/* @vite-ignore */ src);
+            const url = new URL(src, location.href);
+            url.searchParams.append('s', ReelDemo.#srcLoadSeq++);
+
+            const demoModule = await import(/* @vite-ignore */ url.toString());
             if (typeof demoModule.default !== 'function') {
                 throw new Error('Module does not have a default function export.');
             }
@@ -363,75 +380,88 @@ class ReelDemo extends HTMLElement {
     }
 
     disconnectedCallback() {
+        reconcile(this.shadowRoot, null);
         this.#engine.dispose();
     }
 
     #render() {
-        const state$ = zip(
-            (activePanelId, panels) => ({ activePanelId, panels }),
-            this.#engine.query(new ActivePanel()),
-            this.#engine.query(new Panels())
-        );
-
-        const app = watch(state$, ({ activePanelId, panels }) => {
-            const renderTab = (p) => div({ className: 'tab' },
-                input({ type: 'radio', name: 'tabs', id: `tab-${p.id}`, checked: activePanelId === p.id }),
-                label({ for: `tab-${p.id}` }, p.name).on({ click: () => this.#engine.dispatch(new SetActivePanel(p.id)) })
-            );
-
-            const renderPanelContent = (p, visible) => div({
-                $classes: ['panel', activePanelId === p.id && visible && 'active']
-            }).key(p.id).opaque().on({
-                $attach: el => p.render(el)
-            });
-
-            return [
+        const renderPane = (pane, panels, activeId) => {
+            return div({ className: 'pane', $styling: { flex: 1 } },
                 div({ className: 'tabs' },
                     ...panels.map(p => {
-                        if (p.visibilityQuery) {
-                            return watch(this.#engine.query(p.visibilityQuery), isVisible => isVisible && renderTab(p));
-                        } else {
-                            return renderTab(p);
-                        }
+                        const renderTab = () => div({ className: 'tab' },
+                            input({ type: 'radio', name: `tabs-${pane}`, id: `tab-${p.id}`, checked: activeId === p.id }),
+                            label({ for: `tab-${p.id}` }, p.name).on({ click: () => this.#engine.dispatch(new SetActivePanel(pane, p.id)) })
+                        );
+                        return p.visibilityQuery ? watch(this.#engine.query(p.visibilityQuery), isVisible => isVisible && renderTab()) : renderTab();
                     })
                 ),
                 div({ className: 'content-wrapper' },
                     ...panels.map(p => {
-                        if (p.visibilityQuery) {
-                            return watch(this.#engine.query(p.visibilityQuery), isVisible => renderPanelContent(p, isVisible));
-                        } else {
-                            return renderPanelContent(p, true);
-                        }
+                        const renderContent = () => div({
+                          $classes: ['panel-content', activeId === p.id && 'active']
+                        }).key(p.id).opaque().on({ $attach: el => p.render(el) });
+                        return p.visibilityQuery ? watch(this.#engine.query(p.visibilityQuery), isVisible => isVisible && renderContent()) : renderContent();
                     })
                 )
-            ];
-        }, {
-            placeholder: () => p('Loading...')
+            );
+        };
+
+        const app = withContainerSize(size$ => {
+            const isWide$ = dedup()(map(s => s && s.width > 768)(size$));
+
+            return watch(isWide$, isWide => {
+                const state$ = zip(
+                    (panels, leftId, rightId) => ({ panels, leftId, rightId }),
+                    this.#engine.query(new Panels()),
+                    this.#engine.query(new ActivePanelForPane('left')),
+                    this.#engine.query(new ActivePanelForPane('right'))
+                );
+
+                return watch(state$, ({ panels, leftId, rightId }) => {
+                    if (isWide) {
+                        const leftPanels = panels.filter(p => p.pane === 'left');
+                        const rightPanels = panels.filter(p => p.pane === 'right');
+                        
+                        if (rightPanels.length > 0) {
+                            return div({ $styling: { display: 'flex', height: '100%', width: '100%' } },
+                                renderPane('left', leftPanels, leftId),
+                                renderPane('right', rightPanels, rightId)
+                            );
+                        }
+                        return renderPane('left', leftPanels, leftId);
+                    } else {
+                        return renderPane('left', panels, leftId);
+                    }
+                }, { placeholder: () => p('Loading...') });
+            });
         });
 
         reconcile(this.shadowRoot, [app]);
     }
 
-    #renderProperty(prop) {
-        const { id, name, options } = prop;
-        
-        const control = watch(this.#engine.query(new Property(id)), value => {
-            switch (options.type) {
-                case 'range':
-                    return input({ type: 'range', min: options.min, max: options.max, value })
-                        .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.valueAsNumber)) });
-                case 'text':
-                    return input({ type: 'text', value })
-                        .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.value)) });
-                default:
-                    return span('Unknown property type');
-            }
+    #propertyControl(id) {
+        const spec$ = this.#engine.query(new PropertySpec(id));
+        return watch(spec$, spec => {
+            if (!spec) return null;
+            const { name, options } = spec;
+            const control = watch(this.#engine.query(new PropertyValue(id)), value => {
+                switch (options.type) {
+                    case 'range':
+                        return input({ type: 'range', min: options.min, max: options.max, value })
+                            .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.valueAsNumber)) });
+                    case 'text':
+                        return input({ type: 'text', value })
+                            .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.value)) });
+                    default:
+                        return span('Unknown property type');
+                }
+            });
+            return div({ className: 'property-item' },
+                label({ className: 'property-label' }, name),
+                control
+            );
         });
-
-        return div({ $styling: { marginBottom: '0.5em' } },
-            label(name),
-            control
-        );
     }
 }
 

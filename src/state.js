@@ -112,18 +112,6 @@ export class SelectedCard extends Query {
     }
 }
 
-export class IsWideScreen extends Query {
-    boot(_, { notify }) {
-        const mql = window.matchMedia('(min-width: 768px)');
-        const listener = (e) => notify(e.matches);
-        mql.addEventListener('change', listener);
-        notify(mql.matches);
-        return () => mql.removeEventListener('change', listener);
-    }
-    kill(resources, { bootResult }) {
-        bootResult?.();
-    }
-}
 
 // --- Actions ---
 

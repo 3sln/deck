@@ -4,23 +4,21 @@
     "": {
       "name": "@3sln/reel",
       "dependencies": {
-        "@3sln/bones": "^0.0.1",
-        "@3sln/dodo": "^0.0.1",
+        "@3sln/bones": "link:@3sln/bones",
+        "@3sln/dodo": "link:@3sln/dodo",
         "@3sln/ngin": "^0.0.1",
+        "fs-extra": "^11.3.2",
         "glob": "^10.3.10",
         "highlight.js": "^11.9.0",
         "marked": "^16.3.0",
-      },
-      "devDependencies": {
-        "fs-extra": "^11.3.2",
         "vite": "^5.1.0",
       },
     },
   },
   "packages": {
-    "@3sln/bones": ["@3sln/bones@0.0.1", "", {}, "sha512-+o0NhSEEAOokSkEHEE2HO6CGu3MZqNxFYIIHgRFdnokS7igxw1N2+JBra2f0lgxj7lYHybiMT0oyHgXUxUMQfg=="],
+    "@3sln/bones": ["@3sln/bones@link:@3sln/bones", {}],
 
-    "@3sln/dodo": ["@3sln/dodo@0.0.1", "", {}, "sha512-3L09AIC7lUIYVs0bX5zqpfIK9nurcNGCuC3pIwxWeiym/ehP1pw4kvpFSQkCh08/oiOZcEd048JaRXJutQ2vBQ=="],
+    "@3sln/dodo": ["@3sln/dodo@link:@3sln/dodo", {}],
 
     "@3sln/ngin": ["@3sln/ngin@0.0.1", "", {}, "sha512-gwLlFaw0YdFz+QfPlAFZLDFNfCneAXmjpg84c46eeXaVkJCJNZLIMumrYghz+kF2aqIbR1YDLx83Q2qKF0/vlg=="],
 

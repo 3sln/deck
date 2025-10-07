@@ -1,12 +1,12 @@
 import * as dodo from '@3sln/dodo';
 import observableFactory from '@3sln/bones/observable';
+import resizeFactory from '@3sln/bones/resize';
 import { Engine } from '@3sln/ngin';
 import * as db from './db.js';
 import { 
     uiStateProvider, 
     FilteredCards, 
     SelectedCard, 
-    IsWideScreen, 
     SetSearchQuery, 
     SelectCard, 
     ClearSelection,
@@ -18,7 +18,8 @@ import './reel-demo.js';
 
 // Initialize dodo and bones components
 const { reconcile, h, div, h1, h2, input, p, button, article, header, section, alias, span } = dodo;
-const { watch, zip } = observableFactory({ dodo });
+const { watch, zip, map, dedup, pipe } = observableFactory({ dodo });
+const { withContainerSize } = resizeFactory({ dodo });
 
 // --- UI Components ---
 
@@ -107,7 +108,13 @@ const detailView = alias((card, engine) => {
     if (card.title !== card.path) {
         return article({
             className: 'detail-view',
-            $styling: { padding: '0 1em 1em 1em', 'overflow-y': 'auto', width: '100%', 'max-width': '1200px' }
+            $styling: {
+              padding: '0 1em 1em 1em',
+              'overflow-y': 'auto',
+              width: '100%',
+              'max-width': '1200px',
+              'box-sizing': 'border-box'
+            }
         },
             h1({
                 $styling: {
@@ -149,50 +156,60 @@ const detailView = alias((card, engine) => {
 
 const app = alias((engine) => {
     const state$ = zip(
-        (selectedCard, filteredCards, isWide) => ({ selectedCard, filteredCards, isWide }),
+        (selectedCard, filteredCards) => ({ selectedCard, filteredCards }),
         engine.query(new SelectedCard()),
-        engine.query(new FilteredCards()),
-        engine.query(new IsWideScreen())
+        engine.query(new FilteredCards())
     );
 
-    return watch(state$, ({ selectedCard, filteredCards, isWide }) => {
-        const hasSelection = selectedCard != null;
-
-        const listView = div({ 
-            className: 'list-view', 
-            $styling: { 
-                display: 'flex', 
-                'flex-direction': 'column',
-                flex: hasSelection && isWide ? '1 1 350px' : '0 0 clamp(400px, 60%, 700px)',
-                'max-width': hasSelection && isWide ? '500px' : '700px',
-                transition: 'flex 0.3s ease-in-out',
-                'padding-top': '1rem'
-            }
-        },
-            searchBar(engine),
-            cardList(filteredCards || [], engine)
+    return withContainerSize(size$ => {
+        const isWide$ = pipe(
+            size$,
+            map(size => size && size.width > 768),
+            dedup()
         );
 
-        if (hasSelection) {
-            if (isWide) {
-                return div({ $styling: { display: 'flex', height: '100vh', width: '100vw', 'align-items': 'stretch' } },
-                    listView,
-                    div({ $styling: { flex: '2 1 50%', display: 'flex', 'justify-content': 'center', 'overflow-x': 'auto' } },
-                      detailView(selectedCard, engine)
-                    )
+        return watch(isWide$, isWide => 
+            watch(state$, ({ selectedCard, filteredCards }) => {
+                const hasSelection = selectedCard != null;
+
+                const listView = div({ 
+                    className: 'list-view', 
+                    $styling: { 
+                        display: 'flex', 
+                        'flex-direction': 'column',
+                        flex: hasSelection && isWide ? '1 1 350px' : '0 0 clamp(400px, 60%, 700px)',
+                        'max-width': hasSelection && isWide ? '500px' : '700px',
+                        transition: 'flex 0.3s ease-in-out',
+                        'padding-top': '1rem'
+                    }
+                },
+                    searchBar(engine),
+                    cardList(filteredCards || [], engine)
                 );
-            } else {
-                return detailView(selectedCard, engine);
-            }
-        } else {
-            return div({ $styling: { display: 'flex', 'justify-content': 'center', padding: '2em 0' } },
-                listView
-            );
-        }
-    }, {
-        placeholder: () => p('Indexing cards...')
+
+                if (hasSelection) {
+                    if (isWide) {
+                        return div({ $styling: { display: 'flex', height: '100vh', width: '100vw', 'align-items': 'stretch' } },
+                            listView,
+                            div({ $styling: { flex: '2 1 50%', display: 'flex', 'justify-content': 'center', 'overflow-x': 'auto' } },
+                              detailView(selectedCard, engine)
+                            )
+                        );
+                    } else {
+                        return detailView(selectedCard, engine);
+                    }
+                } else {
+                    return div({ $styling: { display: 'flex', 'justify-content': 'center', padding: '2em 0' } },
+                        listView
+                    );
+                }
+            }, {
+                placeholder: () => p('Indexing cards...')
+            })
+        );
     });
 });
+
 // --- Initial Render ---
 
 export async function renderReel({ target, initialCardPaths }) {
