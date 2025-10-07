@@ -1,8 +1,22 @@
 {
   "name": "@3sln/reel",
   "version": "0.0.1",
-  "private": true,
+  "description": "A Vite plugin for building scalable, zero-config, Markdown-based component playgrounds and documentation sites.",
   "type": "module",
+  "author": "Ray Stubbs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3sln/reel.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "vite",
+    "plugin",
+    "documentation",
+    "markdown",
+    "component",
+    "playground"
+  ],
   "exports": {
     ".": "./src/main.js",
     "./vite-plugin": "./vite-plugin.js"
@@ -10,16 +24,22 @@
   "bin": {
     "reel-build": "./bin/build.js"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "vite-plugin.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
-    "@3sln/bones": "link:@3sln/bones",
-    "@3sln/dodo": "link:@3sln/dodo",
-    "@3sln/ngin": "link:@3sln/ngin",
+    "@3sln/bones": "^0.0.1",
+    "@3sln/dodo": "^0.0.1",
+    "@3sln/ngin": "^0.0.1",
+    "fs-extra": "^11.3.2",
     "glob": "^10.3.10",
     "highlight.js": "^11.9.0",
-    "marked": "^16.3.0"
-  },
-  "devDependencies": {
-    "fs-extra": "^11.3.2",
+    "marked": "^16.3.0",
     "vite": "^5.1.0"
   }
 }
