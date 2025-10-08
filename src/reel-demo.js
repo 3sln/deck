@@ -4,7 +4,7 @@ import { css } from '@3sln/bones/css';
 import busFactory from '@3sln/bones/bus';
 import observableFactory from '@3sln/bones/observable';
 import resizeFactory from '@3sln/bones/resize';
-import hmrRunner, { purge } from './hmr-runner.js';
+
 import { Engine, Provider, Query, Action } from '@3sln/ngin';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -607,9 +607,12 @@ class ReelDemo extends HTMLElement {
         if (!this.#src) return;
 
         try {
-            await hmrRunner(this.#src, this, this.#demoDriver);
+            const url = new URL(this.#src, location.href);
+            url.search += (url.search ? '&' : '') + 'reel-dev-hmr';
+            const module = await import(/* @vite-ignore */ url.href);
+            module.default(this.#demoDriver);
         } catch (err) {
-            console.error(`Failed to load HMR runner for demo module ${this.#src}:`, err);
+            console.error(`Failed to load demo module ${this.#src}:`, err);
             const errorPanel = this.#demoDriver.panel('Error', { pane: 'left' });
             reconcile(errorPanel, [
                 h('div', { $styling: { color: 'red' } },
@@ -622,9 +625,6 @@ class ReelDemo extends HTMLElement {
         this.#abortController.abort();
         reconcile(this.shadowRoot, null);
         this.#engine.dispose();
-        if (this.#src) {
-            purge(this.#src, this);
-        }
     }
 
     #render() {

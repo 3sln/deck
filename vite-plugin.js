@@ -60,6 +60,51 @@ export default function reelPlugin() {
 
   return {
     name: 'vite-plugin-reel',
+    enforce: 'pre',
+
+    resolveId(id) {
+      const hmrRegex = /[?&]reel-dev-hmr\b/;
+      if (hmrRegex.test(id)) {
+        return '\0' + id;
+      }
+    },
+
+    load(id) {
+      const hmrRegex = /[?&]reel-dev-hmr\b/;
+      if (id.startsWith('\0') && hmrRegex.test(id)) {
+        console.log('here');
+        const realPath = id.slice(1).replace(hmrRegex, '');
+        return `
+          import realDefault from '${realPath}';
+
+          let lastArgs;
+          let abortController = new AbortController();
+
+          if (import.meta.hot?.data.lastArgs) {
+            lastArgs = import.meta.hot.data.lastArgs;
+          }
+
+          export default (...args) => {
+            lastArgs = args;
+            const thisContext = { signal: abortController.signal };
+            realDefault.call(thisContext, ...args);
+          };
+
+          if (import.meta.hot) {
+            import.meta.hot.dispose(data => {
+              data.lastArgs = lastArgs;
+              abortController.abort();
+            });
+
+            import.meta.hot.accept(newModule => {
+              if (newModule && newModule.default && lastArgs) {
+                newModule.default(...lastArgs);
+              }
+            });
+          }
+        `;
+      }
+    },
 
     configResolved(config) {
         resolvedConfig = config;
