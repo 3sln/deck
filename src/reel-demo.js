@@ -4,6 +4,7 @@ import { css } from '@3sln/bones/css';
 import busFactory from '@3sln/bones/bus';
 import observableFactory from '@3sln/bones/observable';
 import resizeFactory from '@3sln/bones/resize';
+import hmrRunner, { purge } from './hmr-runner.js';
 import { Engine, Provider, Query, Action } from '@3sln/ngin';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -23,6 +24,18 @@ function filterSource(text) {
     return text.replace(regex, '');
 }
 
+function shallowCompare(objA, objB) {
+    if (objA === objB) return true;
+    if (!objA || !objB) return false;
+    const keysA = Object.keys(objA);
+    const keysB = Object.keys(objB);
+    if (keysA.length !== keysB.length) return false;
+    for (const key of keysA) {
+        if (objA[key] !== objB[key]) return false;
+    }
+    return true;
+}
+
 // --- Reactive Store for Demo State ---
 class DemoState {
     #subject;
@@ -36,6 +49,41 @@ class DemoState {
 
 // --- Ngin State Definitions ---
 
+class SetPaneVisibility extends Action {
+    static deps = ['state'];
+
+    constructor(visibility) {
+        super();
+        this.visibility = visibility;
+    }
+
+    execute({ state }) {
+        state.update(s => ({
+            ...s,
+            paneVisibility: this.visibility
+        }));
+    }
+}
+
+class PaneVisibility extends Query {
+    static deps = ['state'];
+    #sub;
+
+    boot({ state }, { notify }) {
+        let lastVisibility = null;
+        this.#sub = state.state$.subscribe(s => {
+            if (s.paneVisibility !== lastVisibility) {
+                lastVisibility = s.paneVisibility;
+                notify(lastVisibility);
+            }
+        });
+    }
+
+    kill() {
+        this.#sub?.unsubscribe();
+    }
+}
+
 class ActivePanelForPane extends Query {
     static deps = ['state'];
     #sub;
@@ -47,7 +95,7 @@ class ActivePanelForPane extends Query {
             const newId = s.activePanelIds[this.pane];
             if (newId !== lastId) {
                 lastId = newId;
-                notify(lastId);
+                notify(newId);
             }
         });
     }
@@ -65,16 +113,39 @@ class SetActivePanel extends Action {
     }
 }
 
-class AllPropertyIds extends Query {
+class ActivatePanel extends Action {
+    static deps = ['state'];
+    constructor(name) { super(); this.name = name; }
+    execute({ state }) {
+        const currentState = state.state$.value;
+        const { panels, paneVisibility } = currentState;
+        const panel = panels.get(this.name);
+        if (!panel) return;
+
+        let targetPane = panel.pane;
+        if (!paneVisibility[targetPane]) {
+            targetPane = targetPane === 'left' ? 'right' : 'left';
+        }
+
+        if (paneVisibility[targetPane]) {
+            state.update(s => ({
+                ...s,
+                activePanelIds: { ...s.activePanelIds, [targetPane]: this.name }
+            }));
+        }
+    }
+}
+
+class AllPropertyNames extends Query {
     static deps = ['state'];
     #sub;
     boot({ state }, { notify }) {
-        let lastIds = [];
+        let lastNames = [];
         this.#sub = state.state$.subscribe(s => {
-            const ids = s.properties.map(p => p.id);
-            if (ids.length !== lastIds.length || ids.some((id, i) => id !== lastIds[i])) {
-                lastIds = ids;
-                notify(ids);
+            const newNames = Object.keys(s.propertySpecs);
+            if (newNames.length !== lastNames.length || newNames.some((name, i) => name !== lastNames[i])) {
+                lastNames = newNames;
+                notify(lastNames);
             }
         });
     }
@@ -84,37 +155,47 @@ class AllPropertyIds extends Query {
 class PropertySpec extends Query {
     static deps = ['state'];
     #sub;
-    constructor(id) { super(); this.id = id; }
+    constructor(name) {
+        super();
+        this.name = name;
+    }
+
     boot({ state }, { notify }) {
-        let lastProp = null;
+        let lastSpec = null;
         this.#sub = state.state$.subscribe(s => {
-            const prop = s.properties.find(p => p.id === this.id);
-            if (prop?.name !== lastProp?.name || prop?.options !== lastProp?.options) {
-                const spec = prop ? { id: prop.id, name: prop.name, options: prop.options } : null;
-                lastProp = prop;
-                notify(spec);
+            const newSpec = s.propertySpecs[this.name];
+            if (!shallowCompare(newSpec, lastSpec)) {
+                lastSpec = newSpec;
+                notify(newSpec);
             }
         });
     }
-    kill() { this.#sub?.unsubscribe(); }
+    kill() {
+        this.#sub?.unsubscribe();
+    }
 }
 
 class PropertyValue extends Query {
     static deps = ['state'];
     #sub;
-    constructor(id) { super(); this.id = id; }
+    constructor(name) {
+        super();
+        this.name = name;
+    }
+
     boot({ state }, { notify }) {
         let lastValue = undefined;
         this.#sub = state.state$.subscribe(s => {
-            const prop = s.properties.find(p => p.id === this.id);
-            const newValue = prop?.value;
+            const newValue = s.propertyValues[this.name];
             if (newValue !== lastValue) {
                 lastValue = newValue;
                 notify(newValue);
             }
         });
     }
-    kill() { this.#sub?.unsubscribe(); }
+    kill() {
+        this.#sub?.unsubscribe();
+    }
 }
 
 class IsPropertiesPanelVisible extends Query {
@@ -123,7 +204,7 @@ class IsPropertiesPanelVisible extends Query {
     boot({ state }, { notify }) {
         let lastVisible = null;
         this.#sub = state.state$.subscribe(s => {
-            const isVisible = s.properties.length > 0;
+            const isVisible = Object.keys(s.propertySpecs).length > 0;
             if (isVisible !== lastVisible) {
                 lastVisible = isVisible;
                 notify(isVisible);
@@ -133,38 +214,152 @@ class IsPropertiesPanelVisible extends Query {
     kill() { this.#sub?.unsubscribe(); }
 }
 
-class SetProperty extends Action {
+class UpsertProperty extends Action {
     static deps = ['state'];
-    constructor(prop) { super(); this.prop = prop; }
-    execute({ state }) { state.update((s, prop) => ({ ...s, properties: [...s.properties, prop] }), this.prop); }
+    constructor(name, options) {
+        super();
+        this.name = name;
+        this.options = options;
+    }
+
+    execute({ state }) {
+        state.update((s, { name, options }) => {
+            const existingSpec = s.propertySpecs[name];
+            const newSpecs = { ...s.propertySpecs };
+            let newValues = { ...s.propertyValues };
+
+            if (existingSpec && shallowCompare(existingSpec.options, options)) {
+                return s; // No change
+            }
+
+            newSpecs[name] = { name, options };
+            if (!existingSpec) {
+                newValues[name] = options.defaultValue;
+            }
+
+            return { ...s, propertySpecs: newSpecs, propertyValues: newValues };
+        }, { name: this.name, options: this.options });
+    }
 }
 
-class UpdateProperty extends Action {
+class UpdatePropertyValue extends Action {
     static deps = ['state'];
-    constructor(id, value) { super(); this.id = id; this.value = value; }
-    execute({ state }) { state.update((s, id, value) => ({ ...s, properties: s.properties.map(p => p.id === id ? { ...p, value } : p) }), this.id, this.value); }
+
+    constructor(name, value) {
+        super();
+        this.name = name; this.value = value;
+    }
+    
+    execute({ state }) {
+        state.update((s, { name, value }) => ({
+            ...s,
+            propertyValues: { ...s.propertyValues, [name]: value }
+        }), { name: this.name, value: this.value });
+    }
 }
 
 class Panels extends Query {
     static deps = ['state'];
     #sub;
+
     boot({ state }, { notify }) {
         let lastPanels = null;
         this.#sub = state.state$.subscribe(s => {
             if (s.panels !== lastPanels) {
                 lastPanels = s.panels;
-                notify(lastPanels);
+                notify(Array.from(lastPanels.values()));
             }
         });
     }
-    kill() { this.#sub?.unsubscribe(); }
+
+    kill() {
+        this.#sub?.unsubscribe();
+    }
 }
 
-class CreatePanel extends Action {
+class CreateOrUpdatePanel extends Action {
     static deps = ['state'];
-    constructor(panel) { super(); this.panel = panel; }
-    execute({ state }) { state.update((s, panel) => ({ ...s, panels: [...s.panels, panel] }), this.panel); }
+
+    constructor(panel) {
+        super();
+        this.panel = panel;
+    }
+
+    execute({ state }) {
+        state.update((s, panel) => {
+            const newPanels = new Map(s.panels);
+            const existingPanel = newPanels.get(panel.name);
+
+            if (existingPanel) {
+                const updatedPanel = { ...existingPanel, ...panel };
+                if (panel.order === undefined) {
+                    updatedPanel.order = existingPanel.order;
+                }
+                newPanels.set(panel.name, updatedPanel);
+            } else {
+                const newPanel = { ...panel };
+                if (newPanel.order === undefined) {
+                    const maxOrder = Array.from(newPanels.values()).reduce((max, p) => Math.max(max, p.order || 0), 0);
+                    newPanel.order = maxOrder + 1;
+                }
+                newPanels.set(panel.name, newPanel);
+            }
+            return { ...s, panels: newPanels };
+        }, this.panel);
+    }
 }
+
+const panelSanitizerInterceptor = {
+    deps: ['state'],
+    leave: ({ state }) => {
+        const currentState = state.state$.value;
+        const { panels, activePanelIds, paneVisibility } = currentState;
+        const newActivePanelIds = { ...activePanelIds };
+        let changed = false;
+
+        const getEffectivePane = (panel) => {
+            if (paneVisibility.left && !paneVisibility.right) return 'left';
+            if (!paneVisibility.left && paneVisibility.right) return 'right';
+            return panel.pane;
+        };
+
+        const panelsArray = Array.from(panels.values());
+
+        for (const pane of ['left', 'right']) {
+            if (!paneVisibility[pane]) continue;
+
+            const panelsInPane = panelsArray.filter(p => getEffectivePane(p) === pane);
+            if (panelsInPane.length === 0) {
+                if (newActivePanelIds[pane]) {
+                    delete newActivePanelIds[pane];
+                    changed = true;
+                }
+                continue;
+            }
+
+            const activeId = newActivePanelIds[pane];
+            const activePanelIsInPane = panelsInPane.some(p => p.name === activeId);
+
+            if (!activeId || !activePanelIsInPane) {
+                newActivePanelIds[pane] = panelsInPane[0].name;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            state.update(s => ({ ...s, activePanelIds: newActivePanelIds }));
+        }
+    }
+};
+
+const actionLoggerInterceptor = {
+    enter: (_, { action }) => {
+        console.log(`[ACTION START]`, action);
+    },
+    leave: (_, { action }) => {
+        console.log(`[ACTION END]`, action);
+    }
+};
 
 const styles = css`
     :host {
@@ -286,57 +481,102 @@ const styles = css`
 class ReelDemo extends HTMLElement {
     #demoDriver = null;
     #engine;
-    #idCounter = 0;
     #sourceCode$ = new ObservableSubject('Loading...');
-
-    static #srcLoadSeq = 0;
-    static get observedAttributes() { return ['src', 'canonical-src']; } 
+    #src = null;
+    #panelCache = new Map();
+    #abortController = new AbortController();
 
     constructor() {
         super();
         this.attachShadow({ mode: 'open' });
         this.shadowRoot.adoptedStyleSheets = [styles];
         
-        const canvasEl = document.createElement('div');
-        const canvasId = this.#idCounter++;
-        const sourceId = this.#idCounter++;
-        const propsId = this.#idCounter++;
+        const sourcePanelName = 'Source';
+        const propsPanelName = 'Properties';
 
         const demoState = new DemoState({
-            activePanelIds: { left: canvasId, right: propsId },
-            properties: [],
-            panels: [
-                { id: canvasId, name: 'Canvas', pane: 'left', render: c => c.replaceChildren(canvasEl) },
-                { id: sourceId, name: 'Source', pane: 'right', render: c => {
-                    reconcile(c, [watch(this.#sourceCode$, text => 
-                        pre(code({ className: 'language-javascript' }, filterSource(text)).on({
-                            $update: el => { delete el.dataset.highlighted; hljs.highlightElement(el); }
-                        }))
-                    )]);
-                }},
-                { id: propsId, name: 'Properties', pane: 'right', render: c => {
-                    c.classList.add('properties');
-                    const propIds$ = this.#engine.query(new AllPropertyIds());
-                    reconcile(c, [watch(propIds$, ids => ids?.map(id => this.#propertyControl(id).key(id)))]);
-                }, visibilityQuery: new IsPropertiesPanelVisible() }
-            ]
+            activePanelIds: {},
+            propertySpecs: {},
+            propertyValues: {},
+            panels: new Map(),
+            paneVisibility: { left: true, right: true },
         });
 
-        this.#engine = new Engine({ providers: { state: Provider.fromSingleton(demoState) } });
+        this.#engine = new Engine({
+            providers: { state: Provider.fromSingleton(demoState) },
+            interceptors: [panelSanitizerInterceptor, actionLoggerInterceptor],
+        });
+
+        this.#engine.dispatch(new CreateOrUpdatePanel({
+            name: propsPanelName,
+            pane: 'right',
+            order: 2,
+            visibility$: this.#engine.query(new IsPropertiesPanelVisible()),
+            render: container => {
+                const propIds$ = this.#engine.query(new AllPropertyNames());
+                reconcile(container, [
+                    watch(propIds$,
+                        names => names?.map(
+                            name => this.#propertyControl(name).key(name)
+                        )
+                    )
+                ]);
+            }
+        }));
+        this.#engine.dispatch(new CreateOrUpdatePanel({
+            name: sourcePanelName,
+            pane: 'right',
+            order: 1,
+            visibility$: new ObservableSubject(true),
+            render: container => {
+                reconcile(container, [
+                    watch(this.#sourceCode$, text => pre(
+                        code({ className: 'language-javascript' },
+                            filterSource(text))
+                            .on({
+                                $update: el => {
+                                    delete el.dataset.highlighted;
+                                    hljs.highlightElement(el);
+                                }
+                            })
+                    )
+                    )
+                ]);
+            }
+        }));
 
         this.#demoDriver = {
-            dom: canvasEl,
-            panel: (name, { pane = 'left' } = {}) => {
-                const contentNode = document.createElement('div');
-                const panel = { id: this.#idCounter++, name, pane, render: c => c.replaceChildren(contentNode) };
-                this.#engine.dispatch(new CreatePanel(panel));
-                return contentNode;
+            panel: (name, { pane = 'left', order = undefined } = {}) => {
+                if (this.#panelCache.has(name)) {
+                    return this.#panelCache.get(name);
+                }
+
+                const div = document.createElement('div');
+                const shadow = div.attachShadow({ mode: 'open' });
+                this.#panelCache.set(name, shadow);
+
+                const render = container => {
+                  container.replaceChildren(div);
+                };
+                const panel = {
+                    name,
+                    pane,
+                    render,
+                    order,
+                    visibility$: new ObservableSubject(true)
+                };
+                this.#engine.dispatch(new CreateOrUpdatePanel(panel));
+                return shadow;
             },
             property: (name, options) => {
-                const id = this.#idCounter++;
-                const prop = { id, name, options };
-                this.#engine.dispatch(new SetProperty({ ...prop, value: options.defaultValue }));
-                return this.#engine.query(new PropertyValue(id));
+                this.#engine.dispatch(new UpsertProperty(name, options));
+                return this.#engine.query(new PropertyValue(name));
+            },
+            setActivePanel: (name) => {
+                this.#engine.dispatch(new ActivatePanel(name));
+            },
+            get signal() {
+                return this.#abortController.signal;
             }
         };
     }
@@ -363,96 +603,125 @@ class ReelDemo extends HTMLElement {
         this.#fetchSource();
         this.#render();
 
-        const src = this.getAttribute('src');
-        try {
-            const url = new URL(src, location.href);
-            url.searchParams.append('s', ReelDemo.#srcLoadSeq++);
+        this.#src = this.getAttribute('src');
+        if (!this.#src) return;
 
-            const demoModule = await import(/* @vite-ignore */ url.toString());
-            if (typeof demoModule.default !== 'function') {
-                throw new Error('Module does not have a default function export.');
-            }
-            demoModule.default(this.#demoDriver);
+        try {
+            await hmrRunner(this.#src, this, this.#demoDriver);
         } catch (err) {
-            console.error(`Failed to load demo module from ${src}:`, err);
-            reconcile(this.#demoDriver.dom, h('div', { $styling: { color: 'red' } }, `Error: Could not load demo module.`));
+            console.error(`Failed to load HMR runner for demo module ${this.#src}:`, err);
+            const errorPanel = this.#demoDriver.panel('Error', { pane: 'left' });
+            reconcile(errorPanel, [
+                h('div', { $styling: { color: 'red' } },
+                    `Error: Could not load demo module.`)
+            ]);
         }
     }
 
     disconnectedCallback() {
+        this.#abortController.abort();
         reconcile(this.shadowRoot, null);
         this.#engine.dispose();
+        if (this.#src) {
+            purge(this.#src, this);
+        }
     }
 
     #render() {
         const renderPane = (pane, panels, activeId) => {
+            const sortedPanels = [...panels].sort((a, b) => (a.order || 0) - (b.order || 0));
+
             return div({ className: 'pane', $styling: { flex: 1 } },
                 div({ className: 'tabs' },
-                    ...panels.map(p => {
+                    ...sortedPanels.map(p => {
                         const renderTab = () => div({ className: 'tab' },
-                            input({ type: 'radio', name: `tabs-${pane}`, id: `tab-${p.id}`, checked: activeId === p.id }),
-                            label({ for: `tab-${p.id}` }, p.name).on({ click: () => this.#engine.dispatch(new SetActivePanel(pane, p.id)) })
+                            input({
+                                type: 'radio',
+                                name: `tabs-${pane}`,
+                                id: `tab-${p.name}`,
+                                checked: activeId === p.name
+                            }),
+                            label({
+                                for: `tab-${p.name}`
+                            }, p.name).on({
+                                click: () => this.#engine.dispatch(new SetActivePanel(pane, p.name))
+                            })
                         );
-                        return p.visibilityQuery ? watch(this.#engine.query(p.visibilityQuery), isVisible => isVisible && renderTab()) : renderTab();
+                        return watch(p.visibility$, isVisible => isVisible && renderTab());
                     })
                 ),
                 div({ className: 'content-wrapper' },
-                    ...panels.map(p => {
-                        const renderContent = () => div({
-                          $classes: ['panel-content', activeId === p.id && 'active']
-                        }).key(p.id).opaque().on({ $attach: el => p.render(el) });
-                        return p.visibilityQuery ? watch(this.#engine.query(p.visibilityQuery), isVisible => isVisible && renderContent()) : renderContent();
+                    ...sortedPanels.map(p => {
+                        return watch(p.visibility$, isVisible => {
+                            if (!isVisible) {
+                                return null;
+                            }
+
+                            return div({
+                                $classes: ['panel-content', activeId === p.name && 'active']
+                            })
+                            .key(p.name)
+                            .opaque()
+                            .on({ $update: el => p.render(el) });
+                        });
                     })
                 )
             );
         };
 
         const app = withContainerSize(size$ => {
-            const isWide$ = dedup()(map(s => s && s.width > 768)(size$));
+            dedup()(map(s => s && s.width > 768)(size$)).subscribe(isWide => {
+                this.#engine.dispatch(new SetPaneVisibility({ left: true, right: isWide }));
+            });
 
-            return watch(isWide$, isWide => {
-                const state$ = zip(
-                    (panels, leftId, rightId) => ({ panels, leftId, rightId }),
-                    this.#engine.query(new Panels()),
-                    this.#engine.query(new ActivePanelForPane('left')),
-                    this.#engine.query(new ActivePanelForPane('right'))
-                );
+            const state$ = zip(
+                (panels, leftId, rightId, visibility) => ({
+                    panels, leftId, rightId, visibility
+                }),
+                this.#engine.query(new Panels()),
+                this.#engine.query(new ActivePanelForPane('left')),
+                this.#engine.query(new ActivePanelForPane('right')),
+                this.#engine.query(new PaneVisibility())
+            );
 
-                return watch(state$, ({ panels, leftId, rightId }) => {
-                    if (isWide) {
-                        const leftPanels = panels.filter(p => p.pane === 'left');
-                        const rightPanels = panels.filter(p => p.pane === 'right');
-                        
-                        if (rightPanels.length > 0) {
-                            return div({ $styling: { display: 'flex', height: '100%', width: '100%' } },
-                                renderPane('left', leftPanels, leftId),
-                                renderPane('right', rightPanels, rightId)
-                            );
-                        }
-                        return renderPane('left', leftPanels, leftId);
-                    } else {
-                        return renderPane('left', panels, leftId);
-                    }
-                }, { placeholder: () => p('Loading...') });
+            return watch(state$, ({ panels, leftId, rightId, visibility }) => {
+                if (!visibility) return null;
+
+                const leftPanels = visibility.left ? panels.filter(p => p.pane === 'left') : [];
+                const rightPanels = visibility.right ? panels.filter(p => p.pane === 'right') : [];
+
+                if (leftPanels.length > 0 && rightPanels.length > 0) {
+                    return div({ $styling: { display: 'flex', height: '100%', width: '100%' } },
+                        renderPane('left', leftPanels, leftId),
+                        renderPane('right', rightPanels, rightId)
+                    );
+                } else if (visibility.left) {
+                    return renderPane('left', panels, leftId);
+                } else if (visibility.right) {
+                    return renderPane('right', panels, rightId);
+                }
+                return null;
+            }, {
+              placeholder: () => p('Loading...')
             });
         });
 
         reconcile(this.shadowRoot, [app]);
     }
 
-    #propertyControl(id) {
-        const spec$ = this.#engine.query(new PropertySpec(id));
+    #propertyControl(name) {
+        const spec$ = this.#engine.query(new PropertySpec(name));
         return watch(spec$, spec => {
             if (!spec) return null;
             const { name, options } = spec;
-            const control = watch(this.#engine.query(new PropertyValue(id)), value => {
+            const control = watch(this.#engine.query(new PropertyValue(name)), value => {
                 switch (options.type) {
                     case 'range':
                         return input({ type: 'range', min: options.min, max: options.max, value })
-                            .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.valueAsNumber)) });
+                            .on({ input: e => this.#engine.dispatch(new UpdatePropertyValue(name, e.target.valueAsNumber)) });
                     case 'text':
                         return input({ type: 'text', value })
-                            .on({ input: e => this.#engine.dispatch(new UpdateProperty(id, e.target.value)) });
+                            .on({ input: e => this.#engine.dispatch(new UpdatePropertyValue(name, e.target.value)) });
                     default:
                         return span('Unknown property type');
                 }
