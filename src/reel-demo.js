@@ -21,7 +21,7 @@ hljs.registerLanguage('javascript', javascript);
 
 const rootNodeCaches = new WeakMap();
 const DISPOSE_DELAY = 3000; // 3 seconds
-const HOT = !!import.meta.hot;
+const HOT = import.meta.hot ? true : false;
 
 const sourceStyle = css`
   /* Light Theme */
@@ -163,26 +163,9 @@ function createEngine(src) {
 
   engine.dispatch(
     new CreateOrUpdatePanel({
-      name: propsPanelName,
-      pane: 'right',
-      order: 2,
-      visibility$: engine.query(new IsPropertiesPanelVisible()),
-      render: container => {
-        container.adoptedStyleSheets = [propertiesStyle];
-        const propIds$ = engine.query(new AllPropertyNames());
-        reconcile(container, [
-          watch(propIds$, names => names?.map(name => propertyControl(engine, name).key(name))),
-        ]);
-      },
-    }),
-  );
-
-  engine.dispatch(
-    new CreateOrUpdatePanel({
       name: sourcePanelName,
       pane: 'right',
       order: 1,
-      visibility$: new ObservableSubject(true),
       render: container => {
         container.adoptedStyleSheets = [sourceStyle];
 
@@ -202,6 +185,28 @@ function createEngine(src) {
     }),
   );
 
+  let propertyPanelCreated = false;
+  const ensurePropertyPanel = () => {
+    if (propertyPanelCreated) {
+      return;
+    }
+
+    engine.dispatch(
+      new CreateOrUpdatePanel({
+        name: propsPanelName,
+        pane: 'right',
+        order: 2,
+        render: container => {
+          container.adoptedStyleSheets = [propertiesStyle];
+          const propIds$ = engine.query(new AllPropertyNames());
+          reconcile(container, [
+            watch(propIds$, names => names?.map(name => propertyControl(engine, name).key(name))),
+          ]);
+        },
+      }),
+    );
+  }
+
   const driver = {
     panel: (name, render, {pane = 'left', order = undefined} = {}) => {
       const panel = {
@@ -209,11 +214,11 @@ function createEngine(src) {
         pane,
         render,
         order,
-        visibility$: new ObservableSubject(true),
       };
       engine.dispatch(new CreateOrUpdatePanel(panel));
     },
     property: (name, options) => {
+      ensurePropertyPanel();
       engine.dispatch(new UpsertProperty(name, options));
       return engine.query(new PropertyValue(name));
     },
@@ -226,23 +231,28 @@ function createEngine(src) {
   };
 
   (async () => {
-    if (!src) return;
-
-    try {
-      const res = await fetch(`${src}?raw`);
-      const text = await res.text();
-      sourceCode$.next(text);
-    } catch (err) {
-      console.error(`Failed to fetch source for ${src}:`, err);
-      sourceCode$.next(`// Failed to load source`);
+    if (!src) {
+      return;
     }
 
     try {
-      const module = await import(
-        /* @vite-ignore */
-        HOT ? `/@reel-dev-hmr/${encodeURIComponent(src)}` : new URL(src, location.href).href
-      );
-      module.default(driver);
+      if (HOT) {
+        const m = await import(/* @vite-ignore */ `/@reel-dev-hmr/${encodeURIComponent(src)}`);
+        const sub = m.moduleText$.subscribe(text => {
+          sourceCode$.next(text);
+        });
+        abortController.signal.addEventListener('abort', () => {
+          sub.unsubscribe();
+        });
+        m.default(driver);
+      } else {
+        const url = new URL(src, location.href);
+        const m = await import(/* @vite-ignore */ url.href);
+        m.default(driver);
+
+        const text = await fetch(url).then(r => r.text());
+        sourceCode$.next(text);
+      }
     } catch (err) {
       console.error(`Failed to load demo module ${src}:`, err);
       driver.panel('Error', container => {
@@ -576,6 +586,7 @@ class CreateOrUpdatePanel extends Action {
           updatedPanel.order = existingPanel.order;
         }
         newPanels.set(panel.name, updatedPanel);
+        return {...s, panels: newPanels};
       } else {
         const newPanel = {...panel};
         if (newPanel.order === undefined) {
@@ -586,15 +597,30 @@ class CreateOrUpdatePanel extends Action {
           newPanel.order = maxOrder + 1;
         }
         newPanels.set(panel.name, newPanel);
+
+        const newActivePanelIds = s.activePanelIds;
+        if (s.paneVisibility[newPanel.pane]) {
+          newActivePanelIds[newPanel.pane] = newPanel.name;
+        } else {
+          const pane = Object.entries(s.paneVisibility).find(([pane, visible]) => visible)?.[0];
+          if (pane) {
+            newActivePanelIds[pane] = newPanel.name;
+          }
+        }
+
+        return {
+          ...s,
+          panels: newPanels,
+          activePanelIds: newActivePanelIds,
+        };
       }
-      return {...s, panels: newPanels};
     }, this.panel);
   }
 }
 
 const panelSanitizerInterceptor = {
   deps: ['state'],
-  leave: ({state}) => {
+  leave: ({state}, {action}) => {
     const currentState = state.state$.value;
     const {panels, activePanelIds, paneVisibility} = currentState;
     const newActivePanelIds = {...activePanelIds};
@@ -612,19 +638,11 @@ const panelSanitizerInterceptor = {
       if (!paneVisibility[pane]) continue;
 
       const panelsInPane = panelsArray.filter(p => getEffectivePane(p) === pane);
-      if (panelsInPane.length === 0) {
-        if (newActivePanelIds[pane]) {
-          delete newActivePanelIds[pane];
-          changed = true;
-        }
-        continue;
-      }
-
       const activeId = newActivePanelIds[pane];
       const activePanelIsInPane = panelsInPane.some(p => p.name === activeId);
 
       if (!activeId || !activePanelIsInPane) {
-        newActivePanelIds[pane] = panelsInPane[0].name;
+        newActivePanelIds[pane] = panelsInPane[panelsInPane.length - 1].name;
         changed = true;
       }
     }
@@ -757,59 +775,48 @@ class ReelDemo extends HTMLElement {
         {className: 'pane', $styling: {flex: 1}},
         div(
           {className: 'tabs'},
-          ...sortedPanels.map(p => {
-            const renderTab = () =>
-              div(
-                {className: 'tab'},
-                input({
-                  type: 'radio',
-                  name: `tabs-${pane}`,
-                  id: `tab-${p.name}`,
-                  checked: activeId === p.name,
-                }),
-                label(
-                  {
-                    for: `tab-${p.name}`,
-                  },
-                  p.name,
-                ).on({
-                  click: () => this.#engine.dispatch(new SetActivePanel(pane, p.name)),
-                }),
-              );
-            return watch(p.visibility$, isVisible => isVisible && renderTab());
-          }),
+          ...sortedPanels.map(p => div(
+            {className: 'tab'},
+            input({
+              type: 'radio',
+              name: `tabs-${pane}`,
+              id: `tab-${p.name}`,
+              checked: activeId === p.name,
+            }),
+            label(
+              {
+                for: `tab-${p.name}`,
+              },
+              p.name,
+            ).on({
+              click: () => this.#engine.dispatch(new SetActivePanel(pane, p.name)),
+            }),
+          )),
         ),
         div(
           {className: 'content-wrapper'},
-          ...sortedPanels.map(p => {
-            return watch(p.visibility$, isVisible => {
-              if (!isVisible) {
-                return null;
-              }
+          ...sortedPanels.map(p => div({
+            $classes: ['panel-content', activeId === p.name && 'active'],
+          })
+            .key(p.name)
+            .opaque()
+            .on({
+              $attach: el => {
+                const div = document.createElement('div');
+                const shadow = div.attachShadow({mode: 'open'});
+                const aborter = new AbortController();
 
-              return div({
-                $classes: ['panel-content', activeId === p.name && 'active'],
-              })
-                .key(p.name)
-                .opaque()
-                .on({
-                  $attach: el => {
-                    const div = document.createElement('div');
-                    const shadow = div.attachShadow({mode: 'open'});
-                    const aborter = new AbortController();
-
-                    el.appendChild(div);
-                    el._aborter = aborter;
-                  },
-                  $update: el => {
-                    p.render(el.firstChild.shadowRoot, el._aborter.signal);
-                  },
-                  $detach: el => {
-                    el._aborter?.abort();
-                  },
-                });
-            });
-          }),
+                el.appendChild(div);
+                el._aborter = aborter;
+              },
+              $update: el => {
+                p.render(el.firstChild.shadowRoot, el._aborter.signal);
+              },
+              $detach: el => {
+                el._aborter?.abort();
+              },
+            })
+          ),
         ),
       );
     };

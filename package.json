@@ -1,6 +1,6 @@
 {
   "name": "@3sln/reel",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "A Vite plugin for building scalable, zero-config, Markdown-based component playgrounds and documentation sites.",
   "type": "module",
   "author": "Ray Stubbs",

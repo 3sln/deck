@@ -2,6 +2,8 @@ import fs from 'fs-extra';
 import path from 'path';
 import {globSync} from 'glob';
 
+const moduleUrl = import.meta.url;
+
 function getHtmlTemplate(title, importMap, cardPaths) {
   return `
         <!doctype html>
@@ -64,7 +66,6 @@ export default function reelPlugin() {
 
   return {
     name: 'vite-plugin-reel',
-    enforce: 'pre',
 
     resolveId(id) {
       if (id.startsWith('/@reel-dev-hmr/')) {
@@ -73,11 +74,26 @@ export default function reelPlugin() {
       return null;
     },
 
+    async handleHotUpdate({read, modules, server}) {
+      const rawUrls = modules.map(m => m.url).filter(u => u.endsWith('?raw'));
+      if (rawUrls.length === 0) {
+        return;
+      }
+
+      server.ws.send({
+        type: 'custom',
+        event: 'reel-raw-update',
+        data: {urls: rawUrls, text: await read()}
+      });
+    },
+
     load(id) {
       if (id.startsWith('/@reel-dev-hmr/')) {
         const realPath = decodeURIComponent(id.slice('/@reel-dev-hmr/'.length));
+        const rawPath = realPath + '?raw';
         return `
           import realDefault from '${realPath}';
+          import moduleText from '${rawPath}';
 
           let lastArgs;
           let abortController = new AbortController();
@@ -85,6 +101,21 @@ export default function reelPlugin() {
           if (import.meta.hot?.data.lastArgs) {
             lastArgs = import.meta.hot.data.lastArgs;
           }
+
+          const textObservers = import.meta.hot?.data.textObservers ?? [];
+          export const moduleText$ = {
+            subscribe: observer => {
+              const observerObj = typeof observer === 'function' ? {next: observer} : observer;
+              observerObj?.next(moduleText);
+              textObservers.push(observerObj);
+
+              return {
+                unsubscribe: () => {
+                  textObservers = textObservers.filter(x => x !== observerObj);
+                }
+              };
+            }
+          };
 
           export default (...args) => {
             lastArgs = args;
@@ -95,6 +126,7 @@ export default function reelPlugin() {
           if (import.meta.hot) {
             import.meta.hot.dispose(data => {
               data.lastArgs = lastArgs;
+              data.textObservers = textObservers;
               abortController.abort();
             });
 
@@ -103,10 +135,23 @@ export default function reelPlugin() {
                 newModule.default(...lastArgs);
               }
             });
+            import.meta.hot.on('reel-raw-update', ({urls, text}) => {
+              if (!urls.includes('${rawPath}')) {
+                return;
+              }
+
+              for (const observer of textObservers) {
+                observer?.next(text);
+              }
+            });
           }
         `;
       }
       return null;
+    },
+
+    config(config, { command }) {
+      return { optimizeDeps: { include: config.optimizeDeps?.include ?? []}}
     },
 
     configResolved(config) {

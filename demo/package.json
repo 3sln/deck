@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "reel-build"
+  },
+  "dependencies": {
+    "@3sln/reel": "link:@3sln/reel"
+  }
+}

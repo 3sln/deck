@@ -1,0 +1,13 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "dependencies": {
+        "@3sln/reel": "link:@3sln/reel",
+      },
+    },
+  },
+  "packages": {
+    "@3sln/reel": ["@3sln/reel@link:@3sln/reel", { "bin": { "reel-build": "./bin/build.js" } }],
+  }
+}
