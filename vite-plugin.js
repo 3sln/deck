@@ -1,9 +1,9 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { globSync } from 'glob';
+import {globSync} from 'glob';
 
 function getHtmlTemplate(title, importMap, cardPaths) {
-    return `
+  return `
         <!doctype html>
         <html lang="en">
           <head>
@@ -49,13 +49,17 @@ export default function reelPlugin() {
   let resolvedConfig;
 
   function getCardPaths(options) {
-    const { include, ignore } = options;
-    return globSync(include, { 
-        cwd: resolvedConfig.root,
-        ignore: ignore,
-        nodir: true,
-        dot: true
+    const {include, exclude} = options;
+    const projPaths = globSync(include, {
+      cwd: resolvedConfig.root,
+      ignore: exclude,
+      nodir: true,
+      dot: true,
     });
+
+    const webPaths = projPaths.map(projPath => '/' + projPath.replace(/\\/g, '/'));
+
+    return webPaths;
   }
 
   return {
@@ -63,17 +67,15 @@ export default function reelPlugin() {
     enforce: 'pre',
 
     resolveId(id) {
-      const hmrRegex = /[?&]reel-dev-hmr\b/;
-      if (hmrRegex.test(id)) {
-        return '\0' + id;
+      if (id.startsWith('/@reel-dev-hmr/')) {
+        return id;
       }
+      return null;
     },
 
     load(id) {
-      const hmrRegex = /[?&]reel-dev-hmr\b/;
-      if (id.startsWith('\0') && hmrRegex.test(id)) {
-        console.log('here');
-        const realPath = id.slice(1).replace(hmrRegex, '');
+      if (id.startsWith('/@reel-dev-hmr/')) {
+        const realPath = decodeURIComponent(id.slice('/@reel-dev-hmr/'.length));
         return `
           import realDefault from '${realPath}';
 
@@ -104,10 +106,11 @@ export default function reelPlugin() {
           }
         `;
       }
+      return null;
     },
 
     configResolved(config) {
-        resolvedConfig = config;
+      resolvedConfig = config;
     },
 
     async configureServer(server) {
@@ -119,36 +122,36 @@ export default function reelPlugin() {
       const importMap = options.dev?.importMap || options.importMap;
 
       const defaultIgnore = [
-          '**/node_modules/**', 
-          'out/**',
-          `**/${path.basename(resolvedConfig.build.outDir)}/**`,
-          '**/package.json', 
-          '**/package-lock.json',
-          '**/vite.config.js',
-          '**/.git/**'
+        '**/node_modules/**',
+        'out/**',
+        `**/${path.basename(resolvedConfig.build.outDir)}/**`,
+        '**/package.json',
+        '**/package-lock.json',
+        '**/vite.config.js',
+        '**/.git/**',
       ];
       const include = options.dev?.include || ['**/*.{md,html}'];
-      const ignore = options.dev?.exclude || defaultIgnore;
+      const exclude = options.dev?.exclude || defaultIgnore;
 
       server.watcher.on('all', (eventName, eventPath) => {
-        if (!globSync(include, { ignore: ignore, cwd: resolvedConfig.root }).includes(eventPath)) return;
-
-        const webPath = path.relative(resolvedConfig.root, eventPath).replace(/\\/g, '/');
+        const projPath = path.relative(resolvedConfig.root, eventPath);
+        const webPath = '/' + projPath.replace(/\\/g, '/');
+        if (!getCardPaths({include, exclude}).includes(webPath)) return;
 
         switch (eventName) {
-            case 'add':
-            case 'change':
-                server.ws.send({ type: 'custom', event: 'reel:card-changed', data: { path: webPath } });
-                break;
-            case 'unlink':
-                server.ws.send({ type: 'custom', event: 'reel:card-removed', data: { path: webPath } });
-                break;
+          case 'add':
+          case 'change':
+            server.ws.send({type: 'custom', event: 'reel:card-changed', data: {path: webPath}});
+            break;
+          case 'unlink':
+            server.ws.send({type: 'custom', event: 'reel:card-removed', data: {path: webPath}});
+            break;
         }
       });
 
       server.middlewares.use(async (req, res, next) => {
         if (req.url.endsWith('/')) {
-          const cardPaths = getCardPaths({ include, ignore });
+          const cardPaths = getCardPaths({include, exclude});
           const template = getHtmlTemplate(title, importMap, cardPaths);
           const html = await server.transformIndexHtml(req.url, template);
           res.end(html);
@@ -156,6 +159,6 @@ export default function reelPlugin() {
         }
         next();
       });
-    }
+    },
   };
 }

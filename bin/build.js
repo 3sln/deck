@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { build as viteBuild } from 'vite';
+import {build as viteBuild} from 'vite';
 import fs from 'fs-extra';
 import path from 'path';
-import { globSync } from 'glob';
-import { createRequire } from 'module';
+import {globSync} from 'glob';
+import {createRequire} from 'module';
 
 const require = createRequire(import.meta.url);
 
@@ -18,83 +18,82 @@ const reelRoot = path.dirname(reelPluginPath);
 
 // --- Main Build Function ---
 async function build() {
-    try {
-        console.log('Starting Reel build...');
+  try {
+    console.log('Starting Reel build...');
 
-        // 1. Clean output directory
-        await fs.emptyDir(outDir);
-        console.log(`Cleaned ${outDir}`);
+    // 1. Clean output directory
+    await fs.emptyDir(outDir);
+    console.log(`Cleaned ${outDir}`);
 
-        // 2. Bundle the reel application using Vite's JS API
-        console.log('Bundling application assets...');
-        await viteBuild({
-            configFile: false, // Don't look for a vite.config.js in the user's project
-            root: reelRoot,    // The root for this build is the reel package itself
-            build: {
-                outDir: assetsDir,
-                manifest: true,
-                lib: {
-                    entry: path.resolve(reelRoot, 'src/main.js'),
-                    name: 'ReelApp',
-                    fileName: 'reel-app',
-                    formats: ['es']
-                }
-            }
-        });
-        console.log('Application assets bundled.');
+    // 2. Bundle the reel application using Vite's JS API
+    console.log('Bundling application assets...');
+    await viteBuild({
+      configFile: false, // Don't look for a vite.config.js in the user's project
+      root: reelRoot, // The root for this build is the reel package itself
+      build: {
+        outDir: assetsDir,
+        manifest: true,
+        lib: {
+          entry: path.resolve(reelRoot, 'src/main.js'),
+          name: 'ReelApp',
+          fileName: 'reel-app',
+          formats: ['es'],
+        },
+      },
+    });
+    console.log('Application assets bundled.');
 
-        const userPkgJsonPath = path.resolve(userRoot, 'package.json');
-        const userPkgJson = fs.existsSync(userPkgJsonPath) ? await fs.readJson(userPkgJsonPath) : {};
-        const options = userPkgJson['@3sln/reel'] || {};
+    const userPkgJsonPath = path.resolve(userRoot, 'package.json');
+    const userPkgJson = fs.existsSync(userPkgJsonPath) ? await fs.readJson(userPkgJsonPath) : {};
+    const options = userPkgJson['@3sln/reel'] || {};
 
-        // 3. Find and copy all project files based on globs
-        const defaultIgnore = [
-            '**/node_modules/**', 
-            `**/${path.basename(outDir)}/**`,
-            '**/package.json', 
-            '**/package-lock.json',
-            '**/vite.config.js',
-            '**/.git/**'
-        ];
+    // 3. Find and copy all project files based on globs
+    const defaultIgnore = [
+      '**/node_modules/**',
+      `**/${path.basename(outDir)}/**`,
+      '**/package.json',
+      '**/package-lock.json',
+      '**/vite.config.js',
+      '**/.git/**',
+    ];
 
-        const include = options.build?.include || ['**/*'];
-        const exclude = options.build?.exclude || defaultIgnore;
+    const include = options.build?.include || ['**/*'];
+    const exclude = options.build?.exclude || defaultIgnore;
 
-        console.log('Copying project files...');
-        const filesToCopy = globSync(include, { 
-            cwd: userRoot,
-            ignore: exclude,
-            nodir: true,
-            dot: true
-        });
+    console.log('Copying project files...');
+    const filesToCopy = globSync(include, {
+      cwd: userRoot,
+      ignore: exclude,
+      nodir: true,
+      dot: true,
+    });
 
-        for (const file of filesToCopy) {
-            const source = path.resolve(userRoot, file);
-            const dest = path.resolve(outDir, file);
-            await fs.ensureDir(path.dirname(dest));
-            await fs.copy(source, dest);
-        }
-        console.log(`Copied ${filesToCopy.length} files.`);
+    for (const file of filesToCopy) {
+      const source = path.resolve(userRoot, file);
+      const dest = path.resolve(outDir, file);
+      await fs.ensureDir(path.dirname(dest));
+      await fs.copy(source, dest);
+    }
+    console.log(`Copied ${filesToCopy.length} files.`);
 
-        // 4. Find card paths for the index
-        const cardPaths = filesToCopy.filter(file => file.endsWith('.md') || file.endsWith('.html'));
-        console.log(`Found ${cardPaths.length} cards.`);
+    // 4. Find card paths for the index
+    const cardPaths = filesToCopy.filter(file => file.endsWith('.md') || file.endsWith('.html'));
+    console.log(`Found ${cardPaths.length} cards.`);
 
-        // 5. Generate the final index.html
-        console.log('Generating production index.html...');
-        const manifest = await fs.readJson(path.resolve(assetsDir, '.vite/manifest.json'));
-        const entryFile = manifest['src/main.js']?.file;
-        const cssFiles = manifest['src/main.js']?.css || [];
+    // 5. Generate the final index.html
+    console.log('Generating production index.html...');
+    const manifest = await fs.readJson(path.resolve(assetsDir, '.vite/manifest.json'));
+    const entryFile = manifest['src/main.js']?.file;
+    const cssFiles = manifest['src/main.js']?.css || [];
 
-        if (!entryFile) {
-            throw new Error('Could not find entry file in Vite manifest.');
-        }
-        
-        const title = options.build?.title || options.title || 'Reel';
-        const importMap = options.build?.importMap || options.importMap;
+    if (!entryFile) {
+      throw new Error('Could not find entry file in Vite manifest.');
+    }
 
+    const title = options.build?.title || options.title || 'Reel';
+    const importMap = options.build?.importMap || options.importMap;
 
-        const html = `
+    const html = `
             <!doctype html>
             <html lang="en">
               <head>
@@ -137,14 +136,13 @@ async function build() {
             </html>
         `;
 
-        await fs.writeFile(path.resolve(outDir, 'index.html'), html);
-        console.log('Production index.html generated.');
-        console.log('Build complete!');
-
-    } catch (e) {
-        console.error('Reel build failed:', e);
-        process.exit(1);
-    }
+    await fs.writeFile(path.resolve(outDir, 'index.html'), html);
+    console.log('Production index.html generated.');
+    console.log('Build complete!');
+  } catch (e) {
+    console.error('Reel build failed:', e);
+    process.exit(1);
+  }
 }
 
 build();
