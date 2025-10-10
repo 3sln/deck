@@ -3,6 +3,7 @@ import observableFactory from '@3sln/bones/observable';
 import resizeFactory from '@3sln/bones/resize';
 import {Engine} from '@3sln/ngin';
 import * as db from './db.js';
+import {highlight, stylesheet as highlightStylesheet} from './highlight.js';
 import {
   uiStateProvider,
   FilteredCards,
@@ -13,6 +14,7 @@ import {
   LoadCard,
   RemoveCard,
   PruneCards,
+  SetPinnedCards,
 } from './state.js';
 import './reel-demo.js';
 
@@ -86,7 +88,23 @@ const cardListItem = alias((card, engine) => {
   });
 });
 
-const cardList = alias((cards, engine) => {
+const cardList = alias(({search, recents, pinned} = {}, engine) => {
+  const heading = title =>
+    h2(
+      {
+        $styling: {
+          color: 'var(--text-color)',
+          opacity: 0.6,
+          'font-size': '0.8em',
+          'margin-top': '2em',
+          'margin-bottom': '1em',
+          'text-transform': 'uppercase',
+          'letter-spacing': '0.1em',
+        },
+      },
+      title,
+    );
+
   return div(
     {
       className: 'card-list',
@@ -98,7 +116,15 @@ const cardList = alias((cards, engine) => {
         padding: '1em',
       },
     },
-    cards.map(card => cardListItem(card, engine)),
+    (search || []).length > 0 && search.map(card => cardListItem(card, engine)),
+    (pinned || []).length > 0 && [
+      heading('Pinned'),
+      ...pinned.map(card => cardListItem(card, engine)),
+    ],
+    (recents || []).length > 0 && [
+      heading('Recents'),
+      ...recents.map(card => cardListItem(card, engine)),
+    ],
   );
 });
 
@@ -138,7 +164,11 @@ const detailView = alias((card, engine) => {
         span({$styling: {'flex-grow': 1}}, card.title),
         closeButton,
       ),
-      section({innerHTML: card.body}).opaque(),
+      section({innerHTML: card.body})
+        .opaque()
+        .on({
+          $update: el => highlight(el),
+        }),
     );
   } else {
     return article(
@@ -163,7 +193,11 @@ const detailView = alias((card, engine) => {
         },
         closeButton,
       ),
-      section({innerHTML: card.body}).opaque(),
+      section({innerHTML: card.body})
+        .opaque()
+        .on({
+          $update: el => highlight(el),
+        }),
     );
   }
 });
@@ -248,7 +282,8 @@ const app = alias(engine => {
 
 // --- Initial Render ---
 
-export async function renderReel({target, initialCardPaths}) {
+export async function renderReel({target, initialCardPaths, pinnedCardPaths}) {
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, highlightStylesheet];
   await db.initDB();
 
   const engine = new Engine({
@@ -258,6 +293,7 @@ export async function renderReel({target, initialCardPaths}) {
   });
 
   // Initial load
+  engine.dispatch(new SetPinnedCards(pinnedCardPaths || []));
   initialCardPaths.forEach(path => {
     engine.dispatch(new LoadCard(path));
   });

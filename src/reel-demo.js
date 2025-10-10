@@ -6,10 +6,7 @@ import observableFactory from '@3sln/bones/observable';
 import resizeFactory from '@3sln/bones/resize';
 
 import {Engine, Provider, Query, Action} from '@3sln/ngin';
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import githubStyle from 'highlight.js/styles/github.css?inline';
-import githubDarkStyle from 'highlight.js/styles/github-dark.css?inline';
+import {stylesheet as highlightStylesheet, highlight} from './highlight.js';
 
 const {reconcile, h, div, button, pre, code, span, label, input, p} = dodo;
 const {shadow} = shadowFactory({dodo});
@@ -17,19 +14,13 @@ const {ObservableSubject} = busFactory({dodo});
 const {watch, zip, map, dedup} = observableFactory({dodo});
 const {withContainerSize} = resizeFactory({dodo});
 
-hljs.registerLanguage('javascript', javascript);
-
 const rootNodeCaches = new WeakMap();
 const DISPOSE_DELAY = 3000; // 3 seconds
 const HOT = import.meta.hot ? true : false;
 
-const sourceStyle = css`
-  /* Light Theme */
-  ${githubStyle}
-
-  /* Dark Theme */
-    @media (prefers-color-scheme: dark) {
-    ${githubDarkStyle}
+const commonStyle = css`
+  * {
+    box-sizing: border-box;
   }
 `;
 
@@ -167,7 +158,7 @@ function createEngine(src) {
       pane: 'right',
       order: 1,
       render: container => {
-        container.adoptedStyleSheets = [sourceStyle];
+        container.adoptedStyleSheets = [commonStyle, highlightStylesheet];
 
         reconcile(container, [
           watch(sourceCode$, text =>
@@ -175,7 +166,7 @@ function createEngine(src) {
               code({className: 'language-javascript'}, text).on({
                 $update: el => {
                   delete el.dataset.highlighted;
-                  hljs.highlightElement(el);
+                  highlight(el);
                 },
               }),
             ),
@@ -197,7 +188,7 @@ function createEngine(src) {
         pane: 'right',
         order: 2,
         render: container => {
-          container.adoptedStyleSheets = [propertiesStyle];
+          container.adoptedStyleSheets = [commonStyle, propertiesStyle];
           const propIds$ = engine.query(new AllPropertyNames());
           reconcile(container, [
             watch(propIds$, names => names?.map(name => propertyControl(engine, name).key(name))),
@@ -205,7 +196,7 @@ function createEngine(src) {
         },
       }),
     );
-  }
+  };
 
   const driver = {
     panel: (name, render, {pane = 'left', order = undefined} = {}) => {
@@ -642,7 +633,7 @@ const panelSanitizerInterceptor = {
       const activePanelIsInPane = panelsInPane.some(p => p.name === activeId);
 
       if (!activeId || !activePanelIsInPane) {
-        newActivePanelIds[pane] = panelsInPane[panelsInPane.length - 1].name;
+        newActivePanelIds[pane] = panelsInPane[panelsInPane.length - 1]?.name;
         changed = true;
       }
     }
@@ -661,16 +652,12 @@ const actionLoggerInterceptor = {
 
 const demoStyle = css`
   :host {
-    display: block;
+    display: flex;
     border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 1em;
     max-height: 50rem;
-    display: flex;
     background-color: var(--card-bg);
-  }
-  * {
-    box-sizing: border-box;
   }
   .pane {
     display: flex;
@@ -726,8 +713,8 @@ const demoStyle = css`
   }
   .panel-content.active {
     pointer-events: auto;
-    width: auto;
     overflow: auto;
+    width: initial;
   }
   pre > code {
     padding: 1em;
@@ -743,7 +730,7 @@ class ReelDemo extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({mode: 'open'});
-    this.shadowRoot.adoptedStyleSheets = [demoStyle];
+    this.shadowRoot.adoptedStyleSheets = [commonStyle, demoStyle];
   }
 
   async connectedCallback() {
@@ -775,47 +762,50 @@ class ReelDemo extends HTMLElement {
         {className: 'pane', $styling: {flex: 1}},
         div(
           {className: 'tabs'},
-          ...sortedPanels.map(p => div(
-            {className: 'tab'},
-            input({
-              type: 'radio',
-              name: `tabs-${pane}`,
-              id: `tab-${p.name}`,
-              checked: activeId === p.name,
-            }),
-            label(
-              {
-                for: `tab-${p.name}`,
-              },
-              p.name,
-            ).on({
-              click: () => this.#engine.dispatch(new SetActivePanel(pane, p.name)),
-            }),
-          )),
+          ...sortedPanels.map(p =>
+            div(
+              {className: 'tab'},
+              input({
+                type: 'radio',
+                name: `tabs-${pane}`,
+                id: `tab-${p.name}`,
+                checked: activeId === p.name,
+              }),
+              label(
+                {
+                  for: `tab-${p.name}`,
+                },
+                p.name,
+              ).on({
+                click: () => this.#engine.dispatch(new SetActivePanel(pane, p.name)),
+              }),
+            ),
+          ),
         ),
         div(
           {className: 'content-wrapper'},
-          ...sortedPanels.map(p => div({
-            $classes: ['panel-content', activeId === p.name && 'active'],
-          })
-            .key(p.name)
-            .opaque()
-            .on({
-              $attach: el => {
-                const div = document.createElement('div');
-                const shadow = div.attachShadow({mode: 'open'});
-                const aborter = new AbortController();
-
-                el.appendChild(div);
-                el._aborter = aborter;
-              },
-              $update: el => {
-                p.render(el.firstChild.shadowRoot, el._aborter.signal);
-              },
-              $detach: el => {
-                el._aborter?.abort();
-              },
+          ...sortedPanels.map(p =>
+            div({
+              $classes: ['panel-content', activeId === p.name && 'active'],
             })
+              .key(p.name)
+              .opaque()
+              .on({
+                $attach: el => {
+                  const div = document.createElement('div');
+                  const shadow = div.attachShadow({mode: 'open'});
+                  const aborter = new AbortController();
+
+                  el.appendChild(div);
+                  el._aborter = aborter;
+                },
+                $update: el => {
+                  p.render(el.firstChild.shadowRoot, el._aborter.signal);
+                },
+                $detach: el => {
+                  el._aborter?.abort();
+                },
+              }),
           ),
         ),
       );
@@ -848,11 +838,10 @@ class ReelDemo extends HTMLElement {
           const rightPanels = visibility.right ? panels.filter(p => p.pane === 'right') : [];
 
           if (leftPanels.length > 0 && rightPanels.length > 0) {
-            return div(
-              {$styling: {display: 'flex', height: '100%', width: '100%'}},
+            return [
               renderPane('left', leftPanels, leftId),
               renderPane('right', rightPanels, rightId),
-            );
+            ];
           } else if (visibility.left) {
             return renderPane('left', panels, leftId);
           } else if (visibility.right) {

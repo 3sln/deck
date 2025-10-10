@@ -92,6 +92,7 @@ async function build() {
 
     const title = options.build?.title || options.title || 'Reel';
     const importMap = options.build?.importMap || options.importMap;
+    const pinned = options.build?.pinned || options.pinned || [];
 
     const html = `
             <!doctype html>
@@ -103,6 +104,7 @@ async function build() {
                 ${importMap ? `<script type="importmap">${JSON.stringify(importMap)}</script>` : ''}
                 <script>
                   window.__INITIAL_CARD_PATHS__ = ${JSON.stringify(cardPaths)};
+                  window.__PINNED_CARD_PATHS__ = ${JSON.stringify(pinned)};
                 </script>
                 <style>
                   :root {
@@ -129,7 +131,8 @@ async function build() {
                     import { renderReel } from '/assets/${entryFile}';
                     renderReel({
                         target: document.getElementById('root'),
-                        initialCardPaths: window.__INITIAL_CARD_PATHS__
+                        initialCardPaths: window.__INITIAL_CARD_PATHS__,
+                        pinnedCardPaths: window.__PINNED_CARD_PATHS__,
                     });
                 </script>
               </body>

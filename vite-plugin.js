@@ -4,7 +4,7 @@ import {globSync} from 'glob';
 
 const moduleUrl = import.meta.url;
 
-function getHtmlTemplate(title, importMap, cardPaths) {
+function getHtmlTemplate(title, importMap, cardPaths, pinnedCardPaths) {
   return `
         <!doctype html>
         <html lang="en">
@@ -15,6 +15,7 @@ function getHtmlTemplate(title, importMap, cardPaths) {
             ${importMap ? `<script type="importmap">${JSON.stringify(importMap)}</script>` : ''}
             <script>
               window.__INITIAL_CARD_PATHS__ = ${JSON.stringify(cardPaths)};
+              window.__PINNED_CARD_PATHS__ = ${JSON.stringify(pinnedCardPaths)};
             </script>
             <style>
               :root { --bg-color: #fff; --text-color: #222; --border-color: #eee; --card-bg: #fff;
@@ -39,7 +40,8 @@ function getHtmlTemplate(title, importMap, cardPaths) {
               import { renderReel } from '@3sln/reel';
               renderReel({
                 target: document.getElementById('root'),
-                initialCardPaths: window.__INITIAL_CARD_PATHS__
+                initialCardPaths: window.__INITIAL_CARD_PATHS__,
+                pinnedCardPaths: window.__PINNED_CARD_PATHS__,
               });
             </script>
           </body>
@@ -83,7 +85,7 @@ export default function reelPlugin() {
       server.ws.send({
         type: 'custom',
         event: 'reel-raw-update',
-        data: {urls: rawUrls, text: await read()}
+        data: {urls: rawUrls, text: await read()},
       });
     },
 
@@ -150,8 +152,8 @@ export default function reelPlugin() {
       return null;
     },
 
-    config(config, { command }) {
-      return { optimizeDeps: { include: config.optimizeDeps?.include ?? []}}
+    config(config, {command}) {
+      return {optimizeDeps: {include: config.optimizeDeps?.include ?? []}};
     },
 
     configResolved(config) {
@@ -165,6 +167,7 @@ export default function reelPlugin() {
 
       const title = options.dev?.title || options.title || 'Reel (Dev)';
       const importMap = options.dev?.importMap || options.importMap;
+      const pinned = options.dev?.pinned || options.pinned || [];
 
       const defaultIgnore = [
         '**/node_modules/**',
@@ -197,7 +200,7 @@ export default function reelPlugin() {
       server.middlewares.use(async (req, res, next) => {
         if (req.url.endsWith('/')) {
           const cardPaths = getCardPaths({include, exclude});
-          const template = getHtmlTemplate(title, importMap, cardPaths);
+          const template = getHtmlTemplate(title, importMap, cardPaths, pinned);
           const html = await server.transformIndexHtml(req.url, template);
           res.end(html);
           return;

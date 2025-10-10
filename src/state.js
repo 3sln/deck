@@ -47,6 +47,7 @@ export const uiStateProvider = () => {
   const uiState = new UIState({
     query: '',
     selectedCardPath: null,
+    pinnedCardPaths: [],
   });
   return Provider.fromSingleton(uiState);
 };
@@ -64,12 +65,19 @@ export class FilteredCards extends Query {
   static deps = ['state'];
   boot({state}, {notify, engineFeed}) {
     let currentQuery = null;
+    let pinnedPaths = [];
 
     const reQuery = async () => {
-      const cards = currentQuery
-        ? await db.findCardsByQuery(currentQuery)
-        : await db.getRecentCards(100);
-      notify(cards);
+      if (currentQuery) {
+        const cards = await db.findCardsByQuery(currentQuery);
+        notify({search: cards, recents: [], pinned: []});
+      } else {
+        const pinned = await Promise.all(pinnedPaths.map(p => db.getCard(p)));
+        const recent = await db.getRecentCards(100);
+        const pinnedPathsSet = new Set(pinnedPaths);
+        const filteredRecent = recent.filter(r => !pinnedPathsSet.has(r.path));
+        notify({search: [], recents: filteredRecent, pinned: pinned.filter(Boolean)});
+      }
     };
 
     engineFeed.addEventListener('card-loaded', reQuery);
@@ -77,8 +85,16 @@ export class FilteredCards extends Query {
     engineFeed.addEventListener('cards-pruned', reQuery);
 
     state.state$.subscribe(s => {
+      let queryChanged = false;
       if (s.query !== currentQuery) {
         currentQuery = s.query;
+        queryChanged = true;
+      }
+      if (s.pinnedCardPaths !== pinnedPaths) {
+        pinnedPaths = s.pinnedCardPaths;
+        queryChanged = true;
+      }
+      if (queryChanged) {
         reQuery();
       }
     });
@@ -113,6 +129,17 @@ export class SelectedCard extends Query {
 }
 
 // --- Actions ---
+
+export class SetPinnedCards extends Action {
+  static deps = ['state'];
+  constructor(paths) {
+    super();
+    this.paths = paths;
+  }
+  execute({state}) {
+    state.update(s => ({...s, pinnedCardPaths: this.paths}));
+  }
+}
 
 export class LoadCard extends Action {
   constructor(path) {

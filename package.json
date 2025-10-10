@@ -36,8 +36,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@3sln/bones": "^0.0.2",
-    "@3sln/dodo": "^0.0.3",
+    "@3sln/bones": "link:@3sln/bones",
+    "@3sln/dodo": "link:@3sln/dodo",
     "@3sln/ngin": "^0.0.1",
     "fs-extra": "^11.3.2",
     "glob": "^10.3.10",
