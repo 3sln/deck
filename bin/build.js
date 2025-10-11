@@ -4,7 +4,7 @@ import {build as viteBuild} from 'vite';
 import fs from 'fs-extra';
 import path from 'path';
 import {createRequire} from 'module';
-import { sha256, loadDeckConfig, getProjectFiles, getHtmlTemplate } from '../src/config.js';
+import { sha256, loadDeckConfig, getProjectFiles, getCardFiles, getHtmlTemplate } from '../src/config.js';
 
 const require = createRequire(import.meta.url);
 
@@ -72,7 +72,7 @@ async function build() {
     }
 
     // Find card paths and hash content for the index
-    const cardFiles = filesToCopy.filter(file => file.endsWith('.md') || file.endsWith('.html'));
+    const cardFiles = getCardFiles(userRoot, buildConfig);
     const initialCardsData = await Promise.all(cardFiles.map(async (file) => {
         const content = await fs.readFile(path.resolve(outDir, file), 'utf-8');
         const hash = await sha256(content);

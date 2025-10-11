@@ -1,6 +1,6 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { sha256, loadDeckConfig, getProjectFiles, getHtmlTemplate } from './src/config.js';
+import { sha256, loadDeckConfig, getProjectFiles, getCardFiles, getHtmlTemplate } from './src/config.js';
 
 export default function deckPlugin() {
   let resolvedConfig;
@@ -122,7 +122,7 @@ export default function deckPlugin() {
 
       server.middlewares.use(async (req, res, next) => {
         if (req.url.endsWith('/')) {
-          const cardPaths = getProjectFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
+          const cardPaths = getCardFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
           const initialCardsData = await Promise.all(cardPaths.map(async (p) => {
             const content = await fs.readFile(path.join(resolvedConfig.root, p), 'utf-8');
             const hash = await sha256(content);

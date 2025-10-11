@@ -49,6 +49,15 @@ export function getProjectFiles(root, config) {
     });
 }
 
+export function getCardFiles(root, config) {
+    return globSync(config.include, {
+        cwd: root,
+        ignore: config.exclude,
+        nodir: true,
+        dot: true,
+    }).filter(s => s.endsWith('.md') || s.endsWith('.html'));
+}
+
 export function getHtmlTemplate({ title, importMap, initialCardsData, pinnedCardPaths, entryFile, cssFiles = [] }) {
   return `
         <!doctype html>
