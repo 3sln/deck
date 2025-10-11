@@ -24,7 +24,10 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v1
 
-      - name: Install dependencies
+      - name: Install root dependencies
+        run: bun install
+
+      - name: Install deck dependencies
         working-directory: ./deck
         run: bun install
 
