@@ -10,8 +10,7 @@ const require = createRequire(import.meta.url);
 
 // --- Path Resolution ---
 const userRoot = process.cwd();
-const outDir = path.resolve(userRoot, 'out');
-const assetsDir = path.resolve(outDir, 'assets');
+// outDir is now resolved inside build()
 const deckPluginPath = require.resolve('@3sln/deck/vite-plugin');
 const deckRoot = path.dirname(deckPluginPath);
 
@@ -21,7 +20,10 @@ async function build() {
     console.log('Starting Deck build...');
 
     const config = await loadDeckConfig(userRoot);
-    const buildConfig = config.build;
+    const buildConfig = config.build || {};
+
+    const outDir = path.resolve(userRoot, buildConfig.outDir || 'out');
+    const assetsDir = path.resolve(outDir, 'assets');
 
     // Clean output directory
     await fs.emptyDir(outDir);
