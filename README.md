@@ -11,9 +11,8 @@ It uses a client-side database to index your documentation, enabling a fast init
 
 ## Documentation & Live Examples
 
-For a complete guide, API reference, and to see Deck in action, please visit the official documentation site:
-
-**[https://deck.3sln.com](https://deck.3sln.com)**
+For a complete guide, API reference, and to see Deck in action, you can check out Deck's own
+[card Deck here](https://deck.3sln.com).
 
 ## Quick Start
 
