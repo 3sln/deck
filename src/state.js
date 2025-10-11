@@ -1,10 +1,10 @@
 import {Provider, Query, Action} from '@3sln/ngin';
-import busFactory from '@3sln/bones/bus';
+import reactiveFactory from '@3sln/bones/reactive';
 import * as dodo from '@3sln/dodo';
 import {marked} from 'marked';
 import * as db from './db.js';
 
-const {ObservableSubject} = busFactory({dodo});
+const {ObservableSubject} = reactiveFactory({dodo});
 
 // --- Data Transformation ---
 
@@ -142,24 +142,34 @@ export class SetPinnedCards extends Action {
 }
 
 export class LoadCard extends Action {
-  constructor(path) {
+  static deps = ['fetcher'];
+  constructor(cardData) {
     super();
-    this.path = path;
+    this.cardData = cardData;
   }
-  async execute(_, {engineFeed}) {
-    const fetchTime = Date.now();
+  async execute({fetcher}, {engineFeed}) {
+    const { path, hash } = this.cardData;
+
+    // HMR passes no hash, always load.
+    if (hash) {
+        const existing = await db.getCard(path);
+        if (existing && existing.hash === hash) {
+            return; // Content is up to date
+        }
+    }
+
     try {
-      const url = new URL(this.path, location.href);
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Failed to fetch ${this.path}: ${res.statusText}`);
+      const url = new URL(path, location.href);
+      const res = await fetcher.fetch(url);
+      if (!res.ok) throw new Error(`Failed to fetch ${path}: ${res.statusText}`);
       const markdown = await res.text();
-      const card = transformCard(this.path, markdown);
-      const newCard = await db.upsertCard(card, fetchTime);
+      const card = transformCard(path, markdown);
+      const newCard = await db.upsertCard({ ...card, hash });
       if (newCard) {
         engineFeed.dispatchEvent(new CustomEvent('card-loaded', {detail: {card: newCard}}));
       }
     } catch (err) {
-      console.error(`Failed to load card ${this.path}:`, err);
+      console.error(`Failed to load card ${path}:`, err);
     }
   }
 }

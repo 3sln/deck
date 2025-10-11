@@ -1,76 +1,15 @@
 import fs from 'fs-extra';
 import path from 'path';
-import {globSync} from 'glob';
+import { sha256, loadDeckConfig, getProjectFiles, getHtmlTemplate } from './src/config.js';
 
-const moduleUrl = import.meta.url;
-
-function getHtmlTemplate(title, importMap, cardPaths, pinnedCardPaths) {
-  return `
-        <!doctype html>
-        <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>${title}</title>
-            ${importMap ? `<script type="importmap">${JSON.stringify(importMap)}</script>` : ''}
-            <script>
-              window.__INITIAL_CARD_PATHS__ = ${JSON.stringify(cardPaths)};
-              window.__PINNED_CARD_PATHS__ = ${JSON.stringify(pinnedCardPaths)};
-            </script>
-            <style>
-              :root { --bg-color: #fff; --text-color: #222; --border-color: #eee; --card-bg: #fff;
-                --card-hover-bg: #f9f9f9; --input-bg: #fff; --input-border: #ddd; --link-color: #007aff;
-              }
-              @media (prefers-color-scheme: dark) {
-                :root {
-                  --bg-color: #121212; --text-color: #eee; --border-color: #333; --card-bg: #1e1e1e;
-                  --card-hover-bg: #2a2a2a; --input-bg: #2a2a2a; --input-border: #444; --link-color: #09f;
-                }
-              }
-              body {
-                background-color: var(--bg-color); color: var(--text-color);
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                margin: 0; padding: 0;
-              }
-            </style>
-          </head>
-          <body>
-            <div id="root"></div>
-            <script type="module">
-              import { renderReel } from '@3sln/reel';
-              renderReel({
-                target: document.getElementById('root'),
-                initialCardPaths: window.__INITIAL_CARD_PATHS__,
-                pinnedCardPaths: window.__PINNED_CARD_PATHS__,
-              });
-            </script>
-          </body>
-        </html>
-    `;
-}
-
-export default function reelPlugin() {
+export default function deckPlugin() {
   let resolvedConfig;
 
-  function getCardPaths(options) {
-    const {include, exclude} = options;
-    const projPaths = globSync(include, {
-      cwd: resolvedConfig.root,
-      ignore: exclude,
-      nodir: true,
-      dot: true,
-    });
-
-    const webPaths = projPaths.map(projPath => '/' + projPath.replace(/\\/g, '/'));
-
-    return webPaths;
-  }
-
   return {
-    name: 'vite-plugin-reel',
+    name: 'vite-plugin-deck',
 
     resolveId(id) {
-      if (id.startsWith('/@reel-dev-hmr/')) {
+      if (id.startsWith('/@deck-dev-hmr/')) {
         return id;
       }
       return null;
@@ -84,14 +23,14 @@ export default function reelPlugin() {
 
       server.ws.send({
         type: 'custom',
-        event: 'reel-raw-update',
+        event: 'deck-raw-update',
         data: {urls: rawUrls, text: await read()},
       });
     },
 
     load(id) {
-      if (id.startsWith('/@reel-dev-hmr/')) {
-        const realPath = decodeURIComponent(id.slice('/@reel-dev-hmr/'.length));
+      if (id.startsWith('/@deck-dev-hmr/')) {
+        const realPath = decodeURIComponent(id.slice('/@deck-dev-hmr/'.length));
         const rawPath = realPath + '?raw';
         return `
           import realDefault from '${realPath}';
@@ -137,7 +76,7 @@ export default function reelPlugin() {
                 newModule.default(...lastArgs);
               }
             });
-            import.meta.hot.on('reel-raw-update', ({urls, text}) => {
+            import.meta.hot.on('deck-raw-update', ({urls, text}) => {
               if (!urls.includes('${rawPath}')) {
                 return;
               }
@@ -161,46 +100,42 @@ export default function reelPlugin() {
     },
 
     async configureServer(server) {
-      const userPkgJsonPath = path.resolve(resolvedConfig.root, 'package.json');
-      const userPkgJson = await fs.readJson(userPkgJsonPath);
-      const options = userPkgJson['@3sln/reel'] || {};
-
-      const title = options.dev?.title || options.title || 'Reel (Dev)';
-      const importMap = options.dev?.importMap || options.importMap;
-      const pinned = options.dev?.pinned || options.pinned || [];
-
-      const defaultIgnore = [
-        '**/node_modules/**',
-        'out/**',
-        `**/${path.basename(resolvedConfig.build.outDir)}/**`,
-        '**/package.json',
-        '**/package-lock.json',
-        '**/vite.config.js',
-        '**/.git/**',
-      ];
-      const include = options.dev?.include || ['**/*.{md,html}'];
-      const exclude = options.dev?.exclude || defaultIgnore;
+      const config = await loadDeckConfig(resolvedConfig.root);
+      const devConfig = config.dev;
 
       server.watcher.on('all', (eventName, eventPath) => {
         const projPath = path.relative(resolvedConfig.root, eventPath);
         const webPath = '/' + projPath.replace(/\\/g, '/');
-        if (!getCardPaths({include, exclude}).includes(webPath)) return;
+        const files = getProjectFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
+        if (!files.includes(webPath)) return;
 
         switch (eventName) {
           case 'add':
           case 'change':
-            server.ws.send({type: 'custom', event: 'reel:card-changed', data: {path: webPath}});
+            server.ws.send({type: 'custom', event: 'deck:card-changed', data: {path: webPath}});
             break;
           case 'unlink':
-            server.ws.send({type: 'custom', event: 'reel:card-removed', data: {path: webPath}});
+            server.ws.send({type: 'custom', event: 'deck:card-removed', data: {path: webPath}});
             break;
         }
       });
 
       server.middlewares.use(async (req, res, next) => {
         if (req.url.endsWith('/')) {
-          const cardPaths = getCardPaths({include, exclude});
-          const template = getHtmlTemplate(title, importMap, cardPaths, pinned);
+          const cardPaths = getProjectFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
+          const initialCardsData = await Promise.all(cardPaths.map(async (p) => {
+            const content = await fs.readFile(path.join(resolvedConfig.root, p), 'utf-8');
+            const hash = await sha256(content);
+            return { path: p, hash };
+          }));
+
+          const template = getHtmlTemplate({
+            title: devConfig.title,
+            importMap: devConfig.importMap,
+            initialCardsData,
+            pinnedCardPaths: devConfig.pinned,
+            entryFile: '@3sln/deck'
+          });
           const html = await server.transformIndexHtml(req.url, template);
           res.end(html);
           return;

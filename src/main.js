@@ -1,8 +1,9 @@
 import * as dodo from '@3sln/dodo';
 import reactiveFactory from '@3sln/bones/reactive';
 import resizeFactory from '@3sln/bones/resize';
-import {Engine} from '@3sln/ngin';
+import {Engine, Provider} from '@3sln/ngin';
 import * as db from './db.js';
+import { ThrottledFetcher } from './fetcher.js';
 import {highlight, stylesheet as highlightStylesheet} from './highlight.js';
 import {
   uiStateProvider,
@@ -16,7 +17,7 @@ import {
   PruneCards,
   SetPinnedCards,
 } from './state.js';
-import './reel-demo.js';
+import './deck-demo.js';
 
 // Initialize dodo and bones components
 const {reconcile, h, div, h1, h2, input, p, button, article, header, section, alias, span} = dodo;
@@ -282,29 +283,41 @@ const app = alias(engine => {
 
 // --- Initial Render ---
 
-export async function renderReel({target, initialCardPaths, pinnedCardPaths}) {
+export async function renderDeck({target, initialCardsData, pinnedCardPaths}) {
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, highlightStylesheet];
   await db.initDB();
+
+  if ('serviceWorker' in navigator && !import.meta.hot) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').then(registration => {
+        console.log('SW registered: ', registration);
+      }).catch(registrationError => {
+        console.log('SW registration failed: ', registrationError);
+      });
+    });
+  }
 
   const engine = new Engine({
     providers: {
       state: uiStateProvider(),
+      fetcher: Provider.fromSingleton(new ThrottledFetcher()),
     },
   });
 
   // Initial load
   engine.dispatch(new SetPinnedCards(pinnedCardPaths || []));
-  initialCardPaths.forEach(path => {
-    engine.dispatch(new LoadCard(path));
+  initialCardsData.forEach(cardData => {
+    engine.dispatch(new LoadCard(cardData));
   });
-  engine.dispatch(new PruneCards(initialCardPaths));
+  engine.dispatch(new PruneCards(initialCardsData.map(c => c.path)));
 
   // Handle HMR
   if (import.meta.hot) {
-    import.meta.hot.on('reel:card-changed', ({path}) => {
-      engine.dispatch(new LoadCard(path));
+    import.meta.hot.on('deck:card-changed', ({path}) => {
+      // In HMR, we don't have the hash, so we always load.
+      engine.dispatch(new LoadCard({ path }));
     });
-    import.meta.hot.on('reel:card-removed', ({path}) => {
+    import.meta.hot.on('deck:card-removed', ({path}) => {
       engine.dispatch(new RemoveCard(path));
     });
   }

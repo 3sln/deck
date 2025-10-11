@@ -1,4 +1,4 @@
-const DB_NAME = 'reel-db';
+const DB_NAME = 'deck-db';
 const DB_VERSION = 3; // Bump version for schema change
 const CARDS_STORE = 'cards';
 const INDEX_STORE = 'searchIndex';
@@ -58,17 +58,13 @@ function getTextContent(html) {
   return new DOMParser().parseFromString(html, 'text/html').body.textContent || '';
 }
 
-async function upsertCard(card, fetchTime) {
+async function upsertCard(card) {
   const db = await initDB();
   const tx = db.transaction([CARDS_STORE, INDEX_STORE], 'readwrite');
   const cardsStore = tx.objectStore(CARDS_STORE);
   const indexStore = tx.objectStore(INDEX_STORE);
 
   const existing = await promisifyRequest(cardsStore.get(card.path));
-  if (existing && existing.updatedAt >= fetchTime) {
-    tx.abort();
-    return;
-  }
 
   if (existing) {
     const pathIndex = indexStore.index('by-path');

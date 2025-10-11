@@ -225,7 +225,7 @@ function createEngine(src) {
 
     try {
       if (HOT) {
-        const m = await import(/* @vite-ignore */ `/@reel-dev-hmr/${encodeURIComponent(src)}`);
+        const m = await import(/* @vite-ignore */ `/@deck-dev-hmr/${encodeURIComponent(src)}`);
         const sub = m.moduleText$.subscribe(text => {
           sourceCode$.next(text);
         });
@@ -720,7 +720,7 @@ const demoStyle = css`
   }
 `;
 
-class ReelDemo extends HTMLElement {
+class DeckDemo extends HTMLElement {
   #engine;
   #id;
 
@@ -732,7 +732,7 @@ class ReelDemo extends HTMLElement {
 
   async connectedCallback() {
     if (!this.id) {
-      throw new Error('An id is required for reel-demo');
+      throw new Error('An id is required for deck-demo');
     }
 
     this.#id = this.id;
@@ -856,4 +856,4 @@ class ReelDemo extends HTMLElement {
   }
 }
 
-customElements.define('reel-demo', ReelDemo);
+customElements.define('deck-demo', DeckDemo);

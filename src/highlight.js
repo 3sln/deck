@@ -4,7 +4,7 @@ import xml from 'highlight.js/lib/languages/xml';
 import css from 'highlight.js/lib/languages/css';
 import githubStyle from 'highlight.js/styles/github.css?inline';
 import githubDarkStyle from 'highlight.js/styles/github-dark.css?inline';
-import {css as createSheet} from '@3sln/bones/css';
+import {css as createSheet} from '@3sln/bones/style';
 
 hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('xml', xml); // For HTML
