@@ -1,17 +1,14 @@
 import * as dodo from '@3sln/dodo';
-import shadowFactory from '@3sln/bones/shadow';
-import {css} from '@3sln/bones/css';
-import busFactory from '@3sln/bones/bus';
-import observableFactory from '@3sln/bones/observable';
+import styleFactory, {css} from '@3sln/bones/style';
+import reactiveFactory from '@3sln/bones/reactive';
 import resizeFactory from '@3sln/bones/resize';
 
 import {Engine, Provider, Query, Action} from '@3sln/ngin';
 import {stylesheet as highlightStylesheet, highlight} from './highlight.js';
 
 const {reconcile, h, div, button, pre, code, span, label, input, p} = dodo;
-const {shadow} = shadowFactory({dodo});
-const {ObservableSubject} = busFactory({dodo});
-const {watch, zip, map, dedup} = observableFactory({dodo});
+
+const {ObservableSubject, watch, zip, map, dedup} = reactiveFactory({dodo});
 const {withContainerSize} = resizeFactory({dodo});
 
 const rootNodeCaches = new WeakMap();

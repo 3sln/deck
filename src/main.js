@@ -1,5 +1,5 @@
 import * as dodo from '@3sln/dodo';
-import observableFactory from '@3sln/bones/observable';
+import reactiveFactory from '@3sln/bones/reactive';
 import resizeFactory from '@3sln/bones/resize';
 import {Engine} from '@3sln/ngin';
 import * as db from './db.js';
@@ -20,7 +20,7 @@ import './reel-demo.js';
 
 // Initialize dodo and bones components
 const {reconcile, h, div, h1, h2, input, p, button, article, header, section, alias, span} = dodo;
-const {watch, zip, map, dedup, pipe} = observableFactory({dodo});
+const {watch, zip, map, dedup, pipe} = reactiveFactory({dodo});
 const {withContainerSize} = resizeFactory({dodo});
 
 // --- UI Components ---
