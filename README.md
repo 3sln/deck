@@ -7,7 +7,7 @@ Deck is a Vite-based tool for creating scalable, zero-config, Markdown-based com
 
 It uses a client-side database to index your documentation, enabling a fast initial load and powerful full-text search, even for very large projects.
 
-> **TODO:** Add screen recording of the Deck UI and features.
+[deck.webm](https://github.com/user-attachments/assets/cc127ba6-202c-47f0-a982-560e05f7574d)
 
 ## Documentation & Live Examples
 
