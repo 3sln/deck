@@ -59,7 +59,7 @@ const propertiesStyle = css`
   }
 `;
 
-function getEngine(rootNode, key, src) {
+function getEngine(rootNode, key, src, canonicalSrc) {
   if (!rootNodeCaches.has(rootNode)) {
     rootNodeCaches.set(rootNode, new Map());
   }
@@ -72,7 +72,7 @@ function getEngine(rootNode, key, src) {
     return entry.engine;
   }
 
-  const {engine, abortController} = createEngine(src);
+  const {engine, abortController} = createEngine(src, canonicalSrc);
   const entry = {
     engine,
     refCount: 1,
@@ -129,7 +129,7 @@ function propertyControl(engine, name) {
   });
 }
 
-function createEngine(src) {
+function createEngine(src, canonicalSrc) {
   const abortController = new AbortController();
   const sourceCode$ = new ObservableSubject('Loading...');
 
@@ -210,35 +210,35 @@ function createEngine(src) {
       engine.dispatch(new UpsertProperty(name, options));
       return engine.query(new PropertyValue(name));
     },
-    setActivePanel: name => {
-      engine.dispatch(new ActivatePanel(name));
-    },
     get signal() {
       return abortController.signal;
     },
   };
 
   (async () => {
-    if (!src) {
-      return;
-    }
+    const esmSrc = src;
+    const textSrc = canonicalSrc || src;
+    if (!esmSrc || !textSrc) return;
 
     try {
       if (HOT) {
-        const m = await import(/* @vite-ignore */ `/@deck-dev-hmr/${encodeURIComponent(src)}`);
-        const sub = m.moduleText$.subscribe(text => {
+        const esm = await import(/* @vite-ignore */ `/@deck-dev-esm/${encodeURIComponent(esmSrc)}`);
+        const txt = await import(/* @vite-ignore */ `/@deck-dev-src/${encodeURIComponent(textSrc)}.js`);
+
+        const sub = txt.moduleText$.subscribe(text => {
           sourceCode$.next(text);
         });
         abortController.signal.addEventListener('abort', () => {
           sub.unsubscribe();
         });
-        m.default(driver);
+        esm.default(driver);
       } else {
-        const url = new URL(src, location.href);
-        const m = await import(/* @vite-ignore */ url.href);
+        const esmUrl = new URL(esmSrc, location.href);
+        const textUrl = new URL(textSrc, location.href);
+        const m = await import(/* @vite-ignore */ esmUrl.href);
         m.default(driver);
 
-        const text = await fetch(url).then(r => r.text());
+        const text = await fetch(textUrl).then(r => r.text());
         sourceCode$.next(text);
       }
     } catch (err) {
@@ -736,7 +736,7 @@ class DeckDemo extends HTMLElement {
     }
 
     this.#id = this.id;
-    this.#engine = getEngine(this.getRootNode(), this.id, this.getAttribute('src'));
+    this.#engine = getEngine(this.getRootNode(), this.id, this.getAttribute('src'), this.getAttribute('canonical-src'));
     this.#render();
   }
 

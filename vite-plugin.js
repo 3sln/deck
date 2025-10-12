@@ -9,7 +9,8 @@ export default function deckPlugin() {
     name: 'vite-plugin-deck',
 
     resolveId(id) {
-      if (id.startsWith('/@deck-dev-hmr/')) {
+      console.log('resolve:', id);
+      if (id.startsWith('/@deck-dev-esm/') || id.startsWith('/@deck-dev-src/')) {
         return id;
       }
       return null;
@@ -29,12 +30,11 @@ export default function deckPlugin() {
     },
 
     load(id) {
-      if (id.startsWith('/@deck-dev-hmr/')) {
-        const realPath = decodeURIComponent(id.slice('/@deck-dev-hmr/'.length));
-        const rawPath = realPath + '?raw';
+      console.log('load:', id);
+      if (id.startsWith('/@deck-dev-esm/')) {
+        const realPath = decodeURIComponent(id.slice('/@deck-dev-esm/'.length));
         return `
           import realDefault from '${realPath}';
-          import moduleText from '${rawPath}';
 
           let lastArgs;
           let abortController = new AbortController();
@@ -42,6 +42,36 @@ export default function deckPlugin() {
           if (import.meta.hot?.data.lastArgs) {
             lastArgs = import.meta.hot.data.lastArgs;
           }
+
+          export default (...args) => {
+            lastArgs = args;
+            const thisContext = { signal: abortController.signal };
+            realDefault.call(thisContext, ...args);
+          };
+
+          if (import.meta.hot) {
+            import.meta.hot.dispose(data => {
+              data.lastArgs = lastArgs;
+              abortController.abort();
+            });
+
+            import.meta.hot.accept(newModule => {
+              if (newModule && newModule.default && lastArgs) {
+                newModule.default(...lastArgs);
+              }
+            });
+          }
+        `;
+      } 
+      
+      if (id.startsWith('/@deck-dev-src/')) {
+        let realPath = decodeURIComponent(id.slice('/@deck-dev-src/'.length));
+        if (realPath.endsWith('.js')) {
+          realPath = realPath.slice(0, -3);
+        }
+        const rawPath = realPath + '?raw';
+        return `
+          import moduleText from '${rawPath}';
 
           const textObservers = import.meta.hot?.data.textObservers ?? [];
           export const moduleText$ = {
@@ -58,24 +88,12 @@ export default function deckPlugin() {
             }
           };
 
-          export default (...args) => {
-            lastArgs = args;
-            const thisContext = { signal: abortController.signal };
-            realDefault.call(thisContext, ...args);
-          };
-
           if (import.meta.hot) {
+            import.meta.hot.accept();
             import.meta.hot.dispose(data => {
-              data.lastArgs = lastArgs;
               data.textObservers = textObservers;
-              abortController.abort();
             });
 
-            import.meta.hot.accept(newModule => {
-              if (newModule && newModule.default && lastArgs) {
-                newModule.default(...lastArgs);
-              }
-            });
             import.meta.hot.on('deck-raw-update', ({urls, text}) => {
               if (!urls.includes('${rawPath}')) {
                 return;
@@ -88,6 +106,7 @@ export default function deckPlugin() {
           }
         `;
       }
+
       return null;
     },
 
@@ -106,7 +125,7 @@ export default function deckPlugin() {
       server.watcher.on('all', (eventName, eventPath) => {
         const projPath = path.relative(resolvedConfig.root, eventPath);
         const webPath = '/' + projPath.replace(/\\/g, '/');
-        const files = getProjectFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
+        const files = getCardFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
         if (!files.includes(webPath)) return;
 
         switch (eventName) {
