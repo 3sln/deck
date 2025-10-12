@@ -5,6 +5,7 @@ import {Engine, Provider} from '@3sln/ngin';
 import * as db from './db.js';
 import { ThrottledFetcher } from './fetcher.js';
 import {highlight, stylesheet as highlightStylesheet} from './highlight.js';
+import * as history from './history.js';
 import {
   uiStateProvider,
   FilteredCards,
@@ -16,6 +17,7 @@ import {
   RemoveCard,
   PruneCards,
   SetPinnedCards,
+  SearchQuery
 } from './state.js';
 import './deck-demo.js';
 
@@ -43,27 +45,32 @@ const closeIcon = () =>
   );
 
 const searchBar = alias(engine => {
-  return div(
-    {className: 'search-bar'},
-    input({
-      type: 'search',
-      placeholder: 'Search cards...',
-      $styling: {
-        width: '100%',
-        padding: '0.75em 1em',
-        'font-size': '1.1em',
-        border: '1px solid var(--input-border)',
-        'background-color': 'var(--input-bg)',
-        color: 'var(--text-color)',
-        'border-radius': '2em',
-        outline: 'none',
-        transition: 'box-shadow 0.2s',
-      },
-    }).on({
-      focus: e => (e.target.style.boxShadow = '0 0 5px rgba(81, 203, 238, 1)'),
-      blur: e => (e.target.style.boxShadow = 'none'),
-      input: e => engine.dispatch(new SetSearchQuery(e.target.value)),
-    }),
+  const query$ = engine.query(new SearchQuery());
+
+  return watch(query$, query =>
+    div(
+      {className: 'search-bar'},
+      input({
+        type: 'search',
+        placeholder: 'Search cards...',
+        value: query,
+        $styling: {
+          width: '100%',
+          padding: '0.75em 1em',
+          'font-size': '1.1em',
+          border: '1px solid var(--input-border)',
+          'background-color': 'var(--input-bg)',
+          color: 'var(--text-color)',
+          'border-radius': '2em',
+          outline: 'none',
+          transition: 'box-shadow 0.2s',
+        },
+      }).on({
+        focus: e => (e.target.style.boxShadow = '0 0 5px rgba(81, 203, 238, 1)'),
+        blur: e => (e.target.style.boxShadow = 'none'),
+        input: e => engine.dispatch(new SetSearchQuery(e.target.value)),
+      }),
+    ),
   );
 });
 
@@ -301,6 +308,7 @@ export async function renderDeck({target, initialCardsData, pinnedCardPaths}) {
     providers: {
       state: uiStateProvider(),
       fetcher: Provider.fromSingleton(new ThrottledFetcher()),
+      history: Provider.fromSingleton(history),
     },
   });
 
@@ -310,6 +318,16 @@ export async function renderDeck({target, initialCardsData, pinnedCardPaths}) {
     engine.dispatch(new LoadCard(cardData));
   });
   engine.dispatch(new PruneCards(initialCardsData.map(c => c.path)));
+
+  const syncNav = () => {
+    const {q, c} = history.getQueryParams();
+    console.log('q', q);
+    engine.dispatch(new SelectCard(c));
+    engine.dispatch(new SetSearchQuery(q));
+  };
+
+  history.onPopState(syncNav);
+  syncNav();
 
   // Handle HMR
   if (import.meta.hot) {

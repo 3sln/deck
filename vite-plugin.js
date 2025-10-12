@@ -9,7 +9,6 @@ export default function deckPlugin() {
     name: 'vite-plugin-deck',
 
     resolveId(id) {
-      console.log('resolve:', id);
       if (id.startsWith('/@deck-dev-esm/') || id.startsWith('/@deck-dev-src/')) {
         return id;
       }
@@ -30,7 +29,6 @@ export default function deckPlugin() {
     },
 
     load(id) {
-      console.log('load:', id);
       if (id.startsWith('/@deck-dev-esm/')) {
         const realPath = decodeURIComponent(id.slice('/@deck-dev-esm/'.length));
         return `
@@ -140,7 +138,7 @@ export default function deckPlugin() {
       });
 
       server.middlewares.use(async (req, res, next) => {
-        if (req.url.endsWith('/')) {
+        if (new URL(req.url, "https://localhost").pathname === '/') {
           const cardPaths = getCardFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
           const initialCardsData = await Promise.all(cardPaths.map(async (p) => {
             const content = await fs.readFile(path.join(resolvedConfig.root, p), 'utf-8');

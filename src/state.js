@@ -186,31 +186,57 @@ export class RemoveCard extends Action {
 }
 
 export class SetSearchQuery extends Action {
-  static deps = ['state'];
+  static deps = ['state', 'history'];
   constructor(query) {
     super();
     this.query = query;
   }
-  execute({state}) {
+  execute({state, history}) {
+    if (this.query !== state.state$.value.query) {
+      history.replaceState({q: this.query});
+    }
     state.update(s => ({...s, query: this.query}));
   }
 }
 
 export class SelectCard extends Action {
-  static deps = ['state'];
+  static deps = ['state', 'history'];
   constructor(cardPath) {
     super();
     this.cardPath = cardPath;
   }
-  async execute({state}) {
-    await db.touchCard(this.cardPath);
-    state.update(s => ({...s, selectedCardPath: this.cardPath}));
+  async execute({state, history}) {
+    if (!this.cardPath) {
+      if (state.state$.value.selectedCardPath !== null) {
+        history.pushState({c: null});
+        state.update(s => ({...s, selectedCardPath: null}));
+      }
+      return;
+    }
+
+    const card = await db.getCard(this.cardPath);
+
+    if (card) {
+      if (this.cardPath !== state.state$.value.selectedCardPath) {
+        history.pushState({c: this.cardPath});
+      }
+      await db.touchCard(this.cardPath);
+      state.update(s => ({...s, selectedCardPath: this.cardPath}));
+    } else {
+      if (state.state$.value.selectedCardPath !== null) {
+        history.pushState({c: null});
+      }
+      state.update(s => ({...s, selectedCardPath: null}));
+    }
   }
 }
 
 export class ClearSelection extends Action {
-  static deps = ['state'];
-  execute({state}) {
+  static deps = ['state', 'history'];
+  execute({state, history}) {
+    if (state.state$.value.selectedCardPath !== null) {
+      history.pushState({c: null});
+    }
     state.update(s => ({...s, selectedCardPath: null}));
   }
 }
