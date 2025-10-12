@@ -8,6 +8,33 @@ import {stylesheet as highlightStylesheet, highlight} from './highlight.js';
 
 const {reconcile, h, div, button, pre, code, span, label, input, p} = dodo;
 
+function getLanguageFromPath(path) {
+  if (!path) return 'plaintext';
+  const extension = path.split('.').pop().toLowerCase();
+  switch (extension) {
+    case 'js':
+    case 'mjs':
+      return 'javascript';
+    case 'cljs':
+    case 'clj':
+    case 'cljd':
+      return 'clojure';
+    case 'css':
+      return 'css';
+    case 'html':
+    case 'xml':
+      return 'xml';
+    case 'md':
+      return 'markdown';
+    case 'json':
+      return 'json';
+    case 'sh':
+      return 'bash';
+    default:
+      return 'plaintext';
+  }
+}
+
 const {ObservableSubject, watch, zip, map, dedup} = reactiveFactory({dodo});
 const {withContainerSize} = resizeFactory({dodo});
 
@@ -132,6 +159,8 @@ function propertyControl(engine, name) {
 function createEngine(src, canonicalSrc) {
   const abortController = new AbortController();
   const sourceCode$ = new ObservableSubject('Loading...');
+  const textSrc = canonicalSrc || src;
+  const lang = getLanguageFromPath(textSrc);
 
   const demoState = new DemoState({
     activePanelIds: {},
@@ -160,7 +189,7 @@ function createEngine(src, canonicalSrc) {
         reconcile(container, [
           watch(sourceCode$, text =>
             pre(
-              code({className: 'language-javascript'}, text).on({
+              code({className: `language-${lang}`}, text).on({
                 $update: el => {
                   delete el.dataset.highlighted;
                   highlight(el);

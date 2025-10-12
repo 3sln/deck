@@ -321,7 +321,6 @@ export async function renderDeck({target, initialCardsData, pinnedCardPaths}) {
 
   const syncNav = () => {
     const {q, c} = history.getQueryParams();
-    console.log('q', q);
     engine.dispatch(new SelectCard(c));
     engine.dispatch(new SetSearchQuery(q));
   };

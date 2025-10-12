@@ -3,6 +3,7 @@ import javascript from 'highlight.js/lib/languages/javascript';
 import xml from 'highlight.js/lib/languages/xml';
 import clojure from 'highlight.js/lib/languages/clojure';
 import css from 'highlight.js/lib/languages/css';
+import json from 'highlight.js/lib/languages/json';
 import githubStyle from 'highlight.js/styles/github.css?inline';
 import githubDarkStyle from 'highlight.js/styles/github-dark.css?inline';
 import {css as createSheet} from '@3sln/bones/style';
@@ -11,6 +12,7 @@ hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('xml', xml); // For HTML
 hljs.registerLanguage('css', css);
 hljs.registerLanguage('clojure', clojure);
+hljs.registerLanguage('json', json);
 
 export const stylesheet = createSheet`
   /* Light Theme */
