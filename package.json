@@ -1,6 +1,6 @@
 {
   "name": "@3sln/deck",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "A Vite plugin for building scalable, zero-config, Markdown-based component playgrounds and documentation sites.",
   "type": "module",
   "author": "Ray Stubbs",
@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "@3sln/bones": "^0.0.4",
-    "@3sln/dodo": "^0.0.5",
+    "@3sln/dodo": "^0.0.7",
     "@3sln/ngin": "^0.0.1",
     "fs-extra": "^11.3.2",
     "glob": "^10.3.10",

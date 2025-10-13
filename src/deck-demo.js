@@ -62,16 +62,9 @@ const propertiesStyle = css`
     gap: 1em;
     margin-bottom: 0.75em;
     width: 250px;
-  }
-  .property-label {
-    flex: 1;
-    text-align: right;
-    font-size: 0.9em;
     color: var(--text-color);
-    opacity: 0.8;
   }
   .property-item input {
-    flex: 2;
     flex-grow: 0;
   }
   input[type='text'] {
@@ -144,15 +137,17 @@ function propertyControl(engine, name) {
           return input({type: 'range', min: options.min, max: options.max, value}).on({
             input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.valueAsNumber)),
           });
-        case 'text':
-          return input({type: 'text', value}).on({
-            input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.value)),
+        case 'checkbox':
+          return input({type: 'checkbox', checked: value}).on({
+            input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.checked)),
           });
         default:
-          return span('Unknown property type');
+          return input({type: options?.type ?? 'text', value}).on({
+            input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.value)),
+          });
       }
     });
-    return div({className: 'property-item'}, label({className: 'property-label'}, name), control);
+    return label({className: 'property-item'}, name, control);
   });
 }
 
@@ -207,6 +202,8 @@ function createEngine(src, canonicalSrc) {
     if (propertyPanelCreated) {
       return;
     }
+
+    propertyPanelCreated = true;
 
     engine.dispatch(
       new CreateOrUpdatePanel({
@@ -817,16 +814,22 @@ class DeckDemo extends HTMLElement {
               .key(p.name)
               .opaque()
               .on({
-                $attach: el => {
+                $update: el => {
+                  if (p.render === el._renderer) {
+                    return;
+                  }
+
+                  el._aborter?.abort();
+
                   const div = document.createElement('div');
                   const shadow = div.attachShadow({mode: 'open'});
                   const aborter = new AbortController();
 
-                  el.appendChild(div);
+                  el.replaceChildren(div);
                   el._aborter = aborter;
-                },
-                $update: el => {
-                  p.render(el.firstChild.shadowRoot, el._aborter.signal);
+                  el._renderer = p.render;
+
+                  p.render(shadow, aborter.signal);
                 },
                 $detach: el => {
                   el._aborter?.abort();
