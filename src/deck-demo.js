@@ -222,12 +222,14 @@ function createEngine(src, canonicalSrc) {
   };
 
   const driver = {
-    panel: (name, render, {pane = 'left', order = undefined} = {}) => {
+    panel: (name, render, {pane = 'left', order = undefined, mode = 'shadow', colorScheme = undefined} = {}) => {
       const panel = {
         name,
         pane,
         render,
         order,
+        mode,
+        colorScheme,
       };
       engine.dispatch(new CreateOrUpdatePanel(panel));
     },
@@ -737,7 +739,7 @@ const demoStyle = css`
   .panel-content.active {
     pointer-events: auto;
     overflow: auto;
-    width: initial;
+    width: 100%;
   }
   pre > code {
     padding: 1em;
@@ -820,16 +822,32 @@ class DeckDemo extends HTMLElement {
                   }
 
                   el._aborter?.abort();
-
-                  const div = document.createElement('div');
-                  const shadow = div.attachShadow({mode: 'open'});
                   const aborter = new AbortController();
-
-                  el.replaceChildren(div);
                   el._aborter = aborter;
                   el._renderer = p.render;
 
-                  p.render(shadow, aborter.signal);
+                  if (p.mode === 'iframe') {
+                      const iframe = document.createElement('iframe');
+                      iframe.style.cssText = 'border: none; width: 100%; height: 100%; display: block;';
+                      
+                      iframe.onload = () => {
+                          const doc = iframe.contentDocument;
+                          if (!doc) return;
+                          
+                          if (p.colorScheme) {
+                              doc.documentElement.style.colorScheme = p.colorScheme;
+                          }
+                          doc.body.style.margin = '0';
+                          
+                          p.render(doc.body, aborter.signal);
+                      };
+                      el.replaceChildren(iframe);
+                  } else {
+                      const div = document.createElement('div');
+                      const shadow = div.attachShadow({mode: 'open'});
+                      el.replaceChildren(div);
+                      p.render(shadow, aborter.signal);
+                  }
                 },
                 $detach: el => {
                   el._aborter?.abort();
