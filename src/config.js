@@ -116,7 +116,7 @@ export function getHtmlTemplate({ title, importMap, initialCardsData, pinnedCard
           <body>
             <div id="root"></div>
             <div style="display: none;" aria-hidden="true">
-              This is a Single Page Application. Agents should look at the <a href="/agents.md">agents.md</a> file for documentation they can read easily.
+              This is a Single Page Application. Agents should look at the <a href="/agents.html">agents.html</a> file for documentation they can read easily.
             </div>
             <script type="module">
               import { renderDeck } from '${entryFile}';

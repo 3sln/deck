@@ -89,14 +89,26 @@ async function build() {
     }));
     console.log(`Found and processed ${initialCardsData.length} cards.`);
 
-    // Generate agents.md
-    console.log('Generating agents.md...');
-    let agentsMd = "# Agents Index\n\nThis file is meant to help LLMs find documentation. Below is a list of available cards.\n\n";
+    // Generate agents.html
+    console.log('Generating agents.html...');
+    let agentsHtml = `<!doctype html>
+<html>
+<head>
+  <title>Agents Index</title>
+</head>
+<body>
+  <h1>Agents Index</h1>
+  <p>This file is meant to help LLMs find documentation. Below is a list of available cards.</p>
+  <ul>
+`;
     for (const card of initialCardsData) {
-        agentsMd += `- [${card.title}](${card.path})\n`;
+        agentsHtml += `    <li><a href="${card.path}">${card.title}</a></li>\n`;
     }
-    await fs.writeFile(path.resolve(outDir, 'agents.md'), agentsMd);
-    console.log('agents.md generated.');
+    agentsHtml += `  </ul>
+</body>
+</html>`;
+    await fs.writeFile(path.resolve(outDir, 'agents.html'), agentsHtml);
+    console.log('agents.html generated.');
 
     // Generate asset manifest for service worker
     console.log('Generating asset manifest...');
