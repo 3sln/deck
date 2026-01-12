@@ -17,6 +17,9 @@ export async function loadDeckConfig(root) {
 
     const defaultConfig = {
         title: 'Deck',
+        favicon: null,
+        scripts: [],
+        stylesheets: [],
         pinned: [],
         pick: {},
         include: ['**/*'],
@@ -58,7 +61,25 @@ export function getCardFiles(root, config) {
     }).filter(s => s.endsWith('.md') || s.endsWith('.html'));
 }
 
-export function getHtmlTemplate({ title, importMap, initialCardsData, pinnedCardPaths, entryFile, cssFiles = [] }) {
+export function getHtmlTemplate({ title, importMap, initialCardsData, pinnedCardPaths, entryFile, cssFiles = [], favicon, scripts = [], stylesheets = [] }) {
+  const scriptTags = scripts.map(s => {
+      if (typeof s === 'string') return `<script src="${s}"></script>`;
+      const attrs = Object.entries(s).map(([k, v]) => {
+          if (v === true) return k;
+          return `${k}="${v}"`;
+      }).join(' ');
+      return `<script ${attrs}></script>`;
+  }).join('\n');
+
+  const styleTags = stylesheets.map(s => {
+      if (typeof s === 'string') return `<link rel="stylesheet" href="${s}">`;
+      const attrs = Object.entries(s).map(([k, v]) => {
+          if (v === true) return k;
+          return `${k}="${v}"`;
+      }).join(' ');
+      return `<link rel="stylesheet" ${attrs}>`;
+  }).join('\n');
+
   return `
         <!doctype html>
         <html lang="en">
@@ -66,6 +87,8 @@ export function getHtmlTemplate({ title, importMap, initialCardsData, pinnedCard
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>${title}</title>
+            ${favicon ? `<link rel="icon" href="${favicon}">` : ''}
+            ${styleTags}
             ${importMap ? `<script type="importmap">${JSON.stringify(importMap)}</script>` : ''}
             <script>
               window.__INITIAL_CARDS_DATA__ = ${JSON.stringify(initialCardsData)};
@@ -88,9 +111,13 @@ export function getHtmlTemplate({ title, importMap, initialCardsData, pinnedCard
               }
             </style>
             ${cssFiles.map(file => `<link rel="stylesheet" href="/assets/${file}">`).join('\n')}
+            ${scriptTags}
           </head>
           <body>
             <div id="root"></div>
+            <div style="display: none;" aria-hidden="true">
+              This is a Single Page Application. Agents should look at the <a href="/agents.md">agents.md</a> file for documentation they can read easily.
+            </div>
             <script type="module">
               import { renderDeck } from '${entryFile}';
               renderDeck({

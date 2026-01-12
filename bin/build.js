@@ -6,6 +6,7 @@ import path from 'path';
 import {createRequire} from 'module';
 import { sha256, loadDeckConfig, getProjectFiles, getCardFiles, getHtmlTemplate } from '../src/config.js';
 
+import {marked} from 'marked';
 const require = createRequire(import.meta.url);
 
 // --- Path Resolution ---
@@ -78,9 +79,24 @@ async function build() {
     const initialCardsData = await Promise.all(cardFiles.map(async (file) => {
         const content = await fs.readFile(path.resolve(outDir, file), 'utf-8');
         const hash = await sha256(content);
-        return { path: `/${file}`, hash };
+
+        // Extract title for agents.md
+        const tokens = marked.lexer(content);
+        const heading = tokens.find(t => t.type === 'heading' && t.depth === 1);
+        const title = heading ? heading.text : path.basename(file, path.extname(file));
+
+        return { path: `/${file}`, hash, title };
     }));
     console.log(`Found and processed ${initialCardsData.length} cards.`);
+
+    // Generate agents.md
+    console.log('Generating agents.md...');
+    let agentsMd = "# Agents Index\n\nThis file is meant to help LLMs find documentation. Below is a list of available cards.\n\n";
+    for (const card of initialCardsData) {
+        agentsMd += `- [${card.title}](${card.path})\n`;
+    }
+    await fs.writeFile(path.resolve(outDir, 'agents.md'), agentsMd);
+    console.log('agents.md generated.');
 
     // Generate asset manifest for service worker
     console.log('Generating asset manifest...');
@@ -111,6 +127,9 @@ async function build() {
         pinnedCardPaths: buildConfig.pinned,
         entryFile: `/assets/${entryFile}`,
         cssFiles,
+        favicon: buildConfig.favicon,
+        scripts: buildConfig.scripts,
+        stylesheets: buildConfig.stylesheets,
     });
 
     await fs.writeFile(path.resolve(outDir, 'index.html'), html);

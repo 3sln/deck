@@ -151,7 +151,10 @@ export default function deckPlugin() {
             importMap: devConfig.importMap,
             initialCardsData,
             pinnedCardPaths: devConfig.pinned,
-            entryFile: '@3sln/deck'
+            entryFile: '@3sln/deck',
+            favicon: devConfig.favicon,
+            scripts: devConfig.scripts,
+            stylesheets: devConfig.stylesheets,
           });
           const html = await server.transformIndexHtml(req.url, template);
           res.end(html);
