@@ -76,35 +76,73 @@ async function build() {
 
     // Find card paths and hash content for the index
     const cardFiles = getCardFiles(userRoot, buildConfig);
+    
+    let allCardsContent = "# Agents Index\n\nThis file contains the concatenated content of all cards to help LLMs understand the available documentation.\n\n";
+
     const initialCardsData = await Promise.all(cardFiles.map(async (file) => {
-        const content = await fs.readFile(path.resolve(outDir, file), 'utf-8');
+        const filePath = path.resolve(outDir, file);
+        let content = await fs.readFile(filePath, 'utf-8');
         const hash = await sha256(content);
 
-        // Extract title for agents.md
+        // Extract title
         const tokens = marked.lexer(content);
         const heading = tokens.find(t => t.type === 'heading' && t.depth === 1);
         const title = heading ? heading.text : path.basename(file, path.extname(file));
+
+        // Process deck-demo tags
+        const demoRegex = /<deck-demo\s+[^>]*src="([^"]+)"[^>]*><\/deck-demo>/g;
+        // Use a loop or replace with async handling if possible, but replace expects sync.
+        // Since we are inside an async map, we can process matches before appending.
+        
+        let match;
+        const replacements = [];
+        while ((match = demoRegex.exec(content)) !== null) {
+            const fullTag = match[0];
+            const src = match[1];
+            try {
+                // src is typically absolute web path like /demos/foo.js. Remove leading slash for filesystem resolve.
+                const relativePath = src.startsWith('/') ? src.slice(1) : src;
+                const demoFilePath = path.resolve(outDir, relativePath);
+                
+                if (await fs.exists(demoFilePath)) {
+                    const demoContent = await fs.readFile(demoFilePath, 'utf-8');
+                    const replacement = `\n\n### Demo Code (${src})\n\n\`\`\`javascript\n${demoContent}\n\`\`\`\n\n`;
+                    replacements.push({start: match.index, end: match.index + fullTag.length, replacement});
+                } else {
+                     console.warn(`Warning: Could not find demo file: ${demoFilePath}`);
+                }
+            } catch (err) {
+                console.warn(`Error processing demo ${src}:`, err);
+            }
+        }
+
+        // Apply replacements in reverse order to preserve indices
+        for (let i = replacements.length - 1; i >= 0; i--) {
+            const {start, end, replacement} = replacements[i];
+            content = content.substring(0, start) + replacement + content.substring(end);
+        }
+
+        allCardsContent += `\n\n---\n\n# ${title} (/${file})\n\n${content}`;
 
         return { path: `/${file}`, hash, title };
     }));
     console.log(`Found and processed ${initialCardsData.length} cards.`);
 
-    // Generate agents.html
+    // Write agents.md
+    console.log('Generating agents.md...');
+    await fs.writeFile(path.resolve(outDir, 'agents.md'), allCardsContent);
+    console.log('agents.md generated.');
+
+    // Write agents.html
     console.log('Generating agents.html...');
-    let agentsHtml = `<!doctype html>
+    const agentsHtmlContent = marked.parse(allCardsContent);
+    const agentsHtml = `<!doctype html>
 <html>
 <head>
   <title>Agents Index</title>
 </head>
 <body>
-  <h1>Agents Index</h1>
-  <p>This file is meant to help LLMs find documentation. Below is a list of available cards.</p>
-  <ul>
-`;
-    for (const card of initialCardsData) {
-        agentsHtml += `    <li><a href="${card.path}">${card.title}</a></li>\n`;
-    }
-    agentsHtml += `  </ul>
+${agentsHtmlContent}
 </body>
 </html>`;
     await fs.writeFile(path.resolve(outDir, 'agents.html'), agentsHtml);
