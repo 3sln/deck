@@ -286,7 +286,7 @@ function createEngine(src, canonicalSrc) {
       if (isDev()) {
         const esm = await import(/* @vite-ignore */ `/@deck-dev-esm/${encodeURIComponent(esmSrc)}`);
         const txt = await import(
-          /* @vite-ignore */ `/@deck-dev-src/${encodeURIComponent(textSrc)}`
+          /* @vite-ignore */ `/@deck-dev-src/${encodeURIComponent(textSrc)}.js`
         );
 
         const sub = txt.moduleText$.subscribe(text => {
