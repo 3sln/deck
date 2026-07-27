@@ -42,10 +42,6 @@ that provides the current value of the property input.
 -   `type` (string, optional): The input type to render for the property.
 -   `defaultValue` (optional): The initial value to use if the property doesn't already exist.
 
-### `driver.setActivePanel(name)`
-
-Programmatically sets the currently visible panel.
-
 ### `driver.signal`
 
 An `AbortSignal` that's aborted when the demo is being torn down.
@@ -80,3 +76,11 @@ export default driver => {
   });
 };
 ```
+
+## A Live Example
+
+This card embeds the demo below with a single tag. Edit `/demos/counter-demo.js`
+while the dev server is running and it re-runs in place, keeping the properties
+you have set.
+
+<deck-demo id="counter-demo" src="/demos/counter-demo.js"></deck-demo>

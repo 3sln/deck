@@ -1,12 +1,21 @@
 import * as dodo from '@3sln/dodo';
-import styleFactory, {css} from '@3sln/bones/style';
-import reactiveFactory from '@3sln/bones/reactive';
-import resizeFactory from '@3sln/bones/resize';
+import {css} from '@3sln/dodo/style';
+import {cell, watch, derive, fromObservable, toObservable} from '@3sln/dodo/reactive';
+import {withElementSize} from '@3sln/dodo/observe';
 
 import {Engine, Provider, Query, Action} from '@3sln/ngin';
 import {stylesheet as highlightStylesheet, highlight} from './highlight.js';
+import {isDev} from './dev-mode.js';
 
-const {reconcile, h, div, button, pre, code, span, label, input, p} = dodo;
+const {reconcile, h, div, pre, code, label, input, p, alias} = dodo;
+
+/** Below this a demo shows one pane at a time rather than side by side. */
+const DEMO_WIDE_BREAKPOINT = 768;
+
+// Frozen and shared so the pane-visibility query can compare by identity and
+// stay quiet when a resize does not actually change which panes are showing.
+const PANES_BOTH = Object.freeze({left: true, right: true});
+const PANES_LEFT = Object.freeze({left: true, right: false});
 
 function getLanguageFromPath(path) {
   if (!path) return 'plaintext';
@@ -35,12 +44,8 @@ function getLanguageFromPath(path) {
   }
 }
 
-const {ObservableSubject, watch, zip, map, dedup} = reactiveFactory({dodo});
-const {withContainerSize} = resizeFactory({dodo});
-
 const rootNodeCaches = new WeakMap();
 const DISPOSE_DELAY = 3000; // 3 seconds
-const HOT = import.meta.hot ? true : false;
 
 const commonStyle = css`
   * {
@@ -87,7 +92,10 @@ function getEngine(rootNode, key, src, canonicalSrc) {
 
   if (cache.has(key)) {
     const entry = cache.get(key);
-    clearTimeout(entry.disposeTimeout);
+    if (entry.disposeTimeout !== null) {
+      clearTimeout(entry.disposeTimeout);
+      entry.disposeTimeout = null;
+    }
     entry.refCount++;
     return entry.engine;
   }
@@ -112,7 +120,7 @@ function releaseEngine(rootNode, key) {
   const entry = cache.get(key);
   entry.refCount--;
 
-  if (entry.refCount === 0) {
+  if (entry.refCount === 0 && entry.disposeTimeout === null) {
     entry.disposeTimeout = setTimeout(() => {
       entry.disposeTimeout = null;
       if (entry.refCount > 0) {
@@ -126,34 +134,52 @@ function releaseEngine(rootNode, key) {
   }
 }
 
-function propertyControl(engine, name) {
-  const spec$ = engine.query(new PropertySpec(name));
-  return watch(spec$, spec => {
+/**
+ * One property row.
+ *
+ * An `alias` rather than a plain function because its body realises two ngin
+ * queries: called on every render it would boot and kill a fresh controller per
+ * keystroke. `alias` re-runs only when its arguments change, and they never do.
+ */
+const propertyControl = alias((engine, name) => {
+  const state$ = derive(
+    [
+      fromObservable(engine.query(new PropertySpec(name))),
+      fromObservable(engine.query(new PropertyValue(name))),
+    ],
+    (spec, value) => ({spec, value}),
+  );
+
+  return watch(state$, ({spec, value}) => {
     if (!spec) return null;
-    const {name, options} = spec;
-    const control = watch(engine.query(new PropertyValue(name)), value => {
-      switch (options?.type ?? 'text') {
-        case 'range':
-          return input({type: 'range', min: options.min, max: options.max, value}).on({
-            input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.valueAsNumber)),
-          });
-        case 'checkbox':
-          return input({type: 'checkbox', checked: value}).on({
-            input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.checked)),
-          });
-        default:
-          return input({type: options?.type ?? 'text', value}).on({
-            input: e => engine.dispatch(new UpdatePropertyValue(name, e.target.value)),
-          });
-      }
-    });
+    const {options} = spec;
+    const onInput = read => e => engine.dispatch(new UpdatePropertyValue(name, read(e.target)));
+
+    let control;
+    switch (options?.type ?? 'text') {
+      case 'range':
+        control = input({type: 'range', min: options.min, max: options.max, value}).on({
+          input: onInput(target => target.valueAsNumber),
+        });
+        break;
+      case 'checkbox':
+        control = input({type: 'checkbox', checked: !!value}).on({
+          input: onInput(target => target.checked),
+        });
+        break;
+      default:
+        control = input({type: options?.type ?? 'text', value: value ?? ''}).on({
+          input: onInput(target => target.value),
+        });
+    }
+
     return label({className: 'property-item'}, name, control);
   });
-}
+});
 
 function createEngine(src, canonicalSrc) {
   const abortController = new AbortController();
-  const sourceCode$ = new ObservableSubject('Loading...');
+  const sourceCode$ = cell('Loading...');
   const textSrc = canonicalSrc || src;
   const lang = getLanguageFromPath(textSrc);
 
@@ -162,7 +188,7 @@ function createEngine(src, canonicalSrc) {
     propertySpecs: {},
     propertyValues: {},
     panels: new Map(),
-    paneVisibility: {left: true, right: true},
+    paneVisibility: PANES_BOTH,
   });
 
   const engine = new Engine({
@@ -185,10 +211,7 @@ function createEngine(src, canonicalSrc) {
           watch(sourceCode$, text =>
             pre(
               code({className: `language-${lang}`}, text).on({
-                $update: el => {
-                  delete el.dataset.highlighted;
-                  highlight(el);
-                },
+                $update: el => highlight(el),
               }),
             ),
           ),
@@ -212,9 +235,14 @@ function createEngine(src, canonicalSrc) {
         order: 2,
         render: container => {
           container.adoptedStyleSheets = [commonStyle, propertiesStyle];
-          const propIds$ = engine.query(new AllPropertyNames());
+          const propIds$ = fromObservable(engine.query(new AllPropertyNames()), {initial: []});
           reconcile(container, [
-            watch(propIds$, names => names?.map(name => propertyControl(engine, name).key(name))),
+            watch(propIds$, names =>
+              div(
+                {className: 'properties'},
+                ...(names ?? []).map(name => propertyControl(engine, name).key(name)),
+              ),
+            ),
           ]);
         },
       }),
@@ -222,7 +250,11 @@ function createEngine(src, canonicalSrc) {
   };
 
   const driver = {
-    panel: (name, render, {pane = 'left', order = undefined, mode = 'shadow', colorScheme = undefined} = {}) => {
+    panel: (
+      name,
+      render,
+      {pane = 'left', order = undefined, mode = 'shadow', colorScheme = undefined} = {},
+    ) => {
       const panel = {
         name,
         pane,
@@ -245,16 +277,20 @@ function createEngine(src, canonicalSrc) {
 
   (async () => {
     const esmSrc = src;
-    const textSrc = canonicalSrc || src;
     if (!esmSrc || !textSrc) return;
 
     try {
-      if (HOT) {
+      // The dev server serves two generated modules per demo — the module
+      // proxy and its source text — in whichever dialect it speaks. A
+      // production build has neither, and imports the real thing.
+      if (isDev()) {
         const esm = await import(/* @vite-ignore */ `/@deck-dev-esm/${encodeURIComponent(esmSrc)}`);
-        const txt = await import(/* @vite-ignore */ `/@deck-dev-src/${encodeURIComponent(textSrc)}.js`);
+        const txt = await import(
+          /* @vite-ignore */ `/@deck-dev-src/${encodeURIComponent(textSrc)}`
+        );
 
         const sub = txt.moduleText$.subscribe(text => {
-          sourceCode$.next(text);
+          sourceCode$.setValue(text);
         });
         abortController.signal.addEventListener('abort', () => {
           sub.unsubscribe();
@@ -267,7 +303,7 @@ function createEngine(src, canonicalSrc) {
         m.default(driver);
 
         const text = await fetch(textUrl).then(r => r.text());
-        sourceCode$.next(text);
+        sourceCode$.setValue(text);
       }
     } catch (err) {
       console.error(`Failed to load demo module ${src}:`, err);
@@ -296,19 +332,24 @@ function shallowCompare(objA, objB) {
 
 // --- Reactive Store for Demo State ---
 class DemoState {
-  #subject;
+  #cell;
+  #observable;
 
   constructor(initialState) {
-    this.#subject = new ObservableSubject(initialState);
+    this.#cell = cell(initialState);
+    this.#observable = toObservable(this.#cell);
   }
 
-  get state$() {
-    return this.#subject;
+  get value() {
+    return this.#cell.getValue();
+  }
+
+  subscribe(observerOrNext) {
+    return this.#observable.subscribe(observerOrNext);
   }
 
   update(updater, ...args) {
-    const currentState = this.#subject.value;
-    this.#subject.next(updater(currentState, ...args));
+    this.#cell.setValue(updater(this.#cell.getValue(), ...args));
   }
 }
 
@@ -323,6 +364,7 @@ class SetPaneVisibility extends Action {
   }
 
   execute({state}) {
+    if (state.value.paneVisibility === this.visibility) return;
     state.update(s => ({
       ...s,
       paneVisibility: this.visibility,
@@ -336,7 +378,7 @@ class PaneVisibility extends Query {
 
   boot({state}, {notify}) {
     let lastVisibility = null;
-    this.#sub = state.state$.subscribe(s => {
+    this.#sub = state.subscribe(s => {
       if (s.paneVisibility !== lastVisibility) {
         lastVisibility = s.paneVisibility;
         notify(lastVisibility);
@@ -360,7 +402,7 @@ class ActivePanelForPane extends Query {
 
   boot({state}, {notify}) {
     let lastId = null;
-    this.#sub = state.state$.subscribe(s => {
+    this.#sub = state.subscribe(s => {
       const newId = s.activePanelIds[this.pane];
       if (newId !== lastId) {
         lastId = newId;
@@ -395,41 +437,13 @@ class SetActivePanel extends Action {
   }
 }
 
-class ActivatePanel extends Action {
-  static deps = ['state'];
-
-  constructor(name) {
-    super();
-    this.name = name;
-  }
-
-  execute({state}) {
-    const currentState = state.state$.value;
-    const {panels, paneVisibility} = currentState;
-    const panel = panels.get(this.name);
-    if (!panel) return;
-
-    let targetPane = panel.pane;
-    if (!paneVisibility[targetPane]) {
-      targetPane = targetPane === 'left' ? 'right' : 'left';
-    }
-
-    if (paneVisibility[targetPane]) {
-      state.update(s => ({
-        ...s,
-        activePanelIds: {...s.activePanelIds, [targetPane]: this.name},
-      }));
-    }
-  }
-}
-
 class AllPropertyNames extends Query {
   static deps = ['state'];
   #sub;
 
   boot({state}, {notify}) {
     let lastNames = [];
-    this.#sub = state.state$.subscribe(s => {
+    this.#sub = state.subscribe(s => {
       const newNames = Object.keys(s.propertySpecs);
       if (
         newNames.length !== lastNames.length ||
@@ -456,7 +470,7 @@ class PropertySpec extends Query {
 
   boot({state}, {notify}) {
     let lastSpec = null;
-    this.#sub = state.state$.subscribe(s => {
+    this.#sub = state.subscribe(s => {
       const newSpec = s.propertySpecs[this.name];
       if (!shallowCompare(newSpec, lastSpec)) {
         lastSpec = newSpec;
@@ -480,30 +494,13 @@ class PropertyValue extends Query {
 
   boot({state}, {notify}) {
     let lastValue = undefined;
-    this.#sub = state.state$.subscribe(s => {
+    let emitted = false;
+    this.#sub = state.subscribe(s => {
       const newValue = s.propertyValues[this.name];
-      if (newValue !== lastValue) {
+      if (!emitted || newValue !== lastValue) {
+        emitted = true;
         lastValue = newValue;
         notify(newValue);
-      }
-    });
-  }
-  kill() {
-    this.#sub?.unsubscribe();
-  }
-}
-
-class IsPropertiesPanelVisible extends Query {
-  static deps = ['state'];
-  #sub;
-
-  boot({state}, {notify}) {
-    let lastVisible = null;
-    this.#sub = state.state$.subscribe(s => {
-      const isVisible = Object.keys(s.propertySpecs).length > 0;
-      if (isVisible !== lastVisible) {
-        lastVisible = isVisible;
-        notify(isVisible);
       }
     });
   }
@@ -570,7 +567,7 @@ class Panels extends Query {
 
   boot({state}, {notify}) {
     let lastPanels = null;
-    this.#sub = state.state$.subscribe(s => {
+    this.#sub = state.subscribe(s => {
       if (s.panels !== lastPanels) {
         lastPanels = s.panels;
         notify(Array.from(lastPanels.values()));
@@ -603,41 +600,42 @@ class CreateOrUpdatePanel extends Action {
         }
         newPanels.set(panel.name, updatedPanel);
         return {...s, panels: newPanels};
-      } else {
-        const newPanel = {...panel};
-        if (newPanel.order === undefined) {
-          const maxOrder = Array.from(newPanels.values()).reduce(
-            (max, p) => Math.max(max, p.order || 0),
-            0,
-          );
-          newPanel.order = maxOrder + 1;
-        }
-        newPanels.set(panel.name, newPanel);
-
-        const newActivePanelIds = s.activePanelIds;
-        if (s.paneVisibility[newPanel.pane]) {
-          newActivePanelIds[newPanel.pane] = newPanel.name;
-        } else {
-          const pane = Object.entries(s.paneVisibility).find(([pane, visible]) => visible)?.[0];
-          if (pane) {
-            newActivePanelIds[pane] = newPanel.name;
-          }
-        }
-
-        return {
-          ...s,
-          panels: newPanels,
-          activePanelIds: newActivePanelIds,
-        };
       }
+
+      const newPanel = {...panel};
+      if (newPanel.order === undefined) {
+        const maxOrder = Array.from(newPanels.values()).reduce(
+          (max, p) => Math.max(max, p.order || 0),
+          0,
+        );
+        newPanel.order = maxOrder + 1;
+      }
+      newPanels.set(panel.name, newPanel);
+
+      // A copy: mutating the current state's map in place makes the change
+      // invisible to anything comparing old against new, which is every query
+      // in this file.
+      const newActivePanelIds = {...s.activePanelIds};
+      const pane = s.paneVisibility[newPanel.pane]
+        ? newPanel.pane
+        : Object.entries(s.paneVisibility).find(([, visible]) => visible)?.[0];
+      if (pane) {
+        newActivePanelIds[pane] = newPanel.name;
+      }
+
+      return {
+        ...s,
+        panels: newPanels,
+        activePanelIds: newActivePanelIds,
+      };
     }, this.panel);
   }
 }
 
 const panelSanitizerInterceptor = {
   deps: ['state'],
-  leave: ({state}, {action}) => {
-    const currentState = state.state$.value;
+  leave: ({state}) => {
+    const currentState = state.value;
     const {panels, activePanelIds, paneVisibility} = currentState;
     const newActivePanelIds = {...activePanelIds};
     let changed = false;
@@ -676,13 +674,32 @@ const actionLoggerInterceptor = {
 };
 
 const demoStyle = css`
+  /*
+   * Height is intrinsic — the tallest panel, capped — and a card author who
+   * wants something else says so on the element:
+   *
+   *     <deck-demo id="x" src="/demos/x.js" style="height: 20rem"></deck-demo>
+   *
+   * A rule in the host document beats a :host rule, so that wins with no
+   * cooperation needed here.
+   */
   :host {
     display: flex;
     border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 1em;
-    max-height: 50rem;
     background-color: var(--card-bg);
+    /*
+     * The cap is viewport-relative as well as absolute, because on a phone
+     * only one pane shows at a time: the demo is sized by whichever panel is
+     * tallest, usually Source, while the reader is looking at a three-line
+     * component. A flat 50rem is 800px, which on an 844px screen is the whole
+     * of it. The dvh line is an override rather than the only rule, so a
+     * browser that does not understand it keeps a working cap instead of
+     * dropping the declaration and letting a demo grow without limit.
+     */
+    max-height: min(50rem, 65vh);
+    max-height: min(50rem, 65dvh);
   }
   .pane {
     display: flex;
@@ -697,6 +714,7 @@ const demoStyle = css`
     display: flex;
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
+    overflow-x: auto;
   }
   .tab label {
     padding: 10px 16px;
@@ -705,6 +723,7 @@ const demoStyle = css`
     background: var(--bg-color);
     color: var(--text-color);
     opacity: 0.7;
+    white-space: nowrap;
     transition:
       background 0.2s,
       color 0.2s,
@@ -725,21 +744,46 @@ const demoStyle = css`
     background: var(--card-hover-bg);
     opacity: 1;
   }
+  /*
+   * Every panel occupies the same grid cell, so the wrapper is as tall as the
+   * tallest of them and switching tabs does not change the demo's height. That
+   * is what stops the card below a demo from jumping when a reader opens the
+   * Source tab.
+   *
+   * Two things this is deliberately not:
+   *
+   * A zero width for the inactive ones reaches for the same goal and misses. A
+   * zero-width panel is still laid out, so its content wraps into a column one
+   * character wide and its height becomes enormous — a two-line panel measured
+   * 551px next to the 303px one beside it, which is the jump it was there to
+   * prevent, and a Source panel of any length simply pinned the demo at its
+   * max-height forever.
+   *
+   * Hiding with display none measures the active panel correctly but takes the
+   * hidden ones out of layout entirely, so the height follows whichever tab is
+   * open — 147px on Counter, 800px on Source.
+   *
+   * Hiding with visibility keeps a panel laid out at its real width, which is
+   * what makes the max meaningful, and keeps its state, its timers and its
+   * iframes exactly as a zero width did.
+   */
   .content-wrapper {
-    display: flex;
+    display: grid;
     flex-grow: 1;
     overflow: hidden;
     padding: 1rem;
   }
   .panel-content {
-    overflow: hidden;
-    width: 0px;
+    grid-area: 1 / 1;
+    visibility: hidden;
     pointer-events: none;
+    overflow: hidden;
+    min-width: 0;
   }
   .panel-content.active {
+    visibility: visible;
     pointer-events: auto;
     overflow: auto;
-    width: 100%;
   }
   pre > code {
     padding: 1em;
@@ -758,13 +802,21 @@ class DeckDemo extends HTMLElement {
     this.shadowRoot.adoptedStyleSheets = [commonStyle, demoStyle];
   }
 
-  async connectedCallback() {
+  connectedCallback() {
     if (!this.id) {
-      throw new Error('An id is required for deck-demo');
+      // Throwing here would take out whatever is upgrading the element, which
+      // in a card body is every element after this one.
+      console.error('Deck: <deck-demo> needs an id; ignoring this one.', this);
+      return;
     }
 
     this.#id = this.id;
-    this.#engine = getEngine(this.getRootNode(), this.id, this.getAttribute('src'), this.getAttribute('canonical-src'));
+    this.#engine = getEngine(
+      this.getRootNode(),
+      this.#id,
+      this.getAttribute('src'),
+      this.getAttribute('canonical-src'),
+    );
     this.#render();
   }
 
@@ -774,12 +826,14 @@ class DeckDemo extends HTMLElement {
     }
 
     reconcile(this.shadowRoot, null);
-    releaseEngine(this.getRootNode(), this.id);
+    releaseEngine(this.getRootNode(), this.#id);
     this.#id = undefined;
     this.#engine = undefined;
   }
 
   #render() {
+    const engine = this.#engine;
+
     const renderPane = (pane, panels, activeId) => {
       const sortedPanels = [...panels].sort((a, b) => (a.order || 0) - (b.order || 0));
 
@@ -793,18 +847,13 @@ class DeckDemo extends HTMLElement {
               input({
                 type: 'radio',
                 name: `tabs-${pane}`,
-                id: `tab-${p.name}`,
+                id: `tab-${pane}-${p.name}`,
                 checked: activeId === p.name,
               }),
-              label(
-                {
-                  for: `tab-${p.name}`,
-                },
-                p.name,
-              ).on({
-                click: () => this.#engine.dispatch(new SetActivePanel(pane, p.name)),
+              label({for: `tab-${pane}-${p.name}`}, p.name).on({
+                click: () => engine.dispatch(new SetActivePanel(pane, p.name)),
               }),
-            ),
+            ).key(p.name),
           ),
         ),
         div(
@@ -827,26 +876,27 @@ class DeckDemo extends HTMLElement {
                   el._renderer = p.render;
 
                   if (p.mode === 'iframe') {
-                      const iframe = document.createElement('iframe');
-                      iframe.style.cssText = 'border: none; width: 100%; height: 100%; display: block;';
-                      
-                      iframe.onload = () => {
-                          const doc = iframe.contentDocument;
-                          if (!doc) return;
-                          
-                          if (p.colorScheme) {
-                              doc.documentElement.style.colorScheme = p.colorScheme;
-                          }
-                          doc.body.style.margin = '0';
-                          
-                          p.render(doc.body, aborter.signal);
-                      };
-                      el.replaceChildren(iframe);
+                    const iframe = document.createElement('iframe');
+                    iframe.style.cssText =
+                      'border: none; width: 100%; height: 100%; display: block;';
+
+                    iframe.onload = () => {
+                      const doc = iframe.contentDocument;
+                      if (!doc) return;
+
+                      if (p.colorScheme) {
+                        doc.documentElement.style.colorScheme = p.colorScheme;
+                      }
+                      doc.body.style.margin = '0';
+
+                      p.render(doc.body, aborter.signal);
+                    };
+                    el.replaceChildren(iframe);
                   } else {
-                      const div = document.createElement('div');
-                      const shadow = div.attachShadow({mode: 'open'});
-                      el.replaceChildren(div);
-                      p.render(shadow, aborter.signal);
+                    const host = document.createElement('div');
+                    const shadow = host.attachShadow({mode: 'open'});
+                    el.replaceChildren(host);
+                    p.render(shadow, aborter.signal);
                   }
                 },
                 $detach: el => {
@@ -858,48 +908,46 @@ class DeckDemo extends HTMLElement {
       );
     };
 
-    const app = withContainerSize(size$ => {
-      dedup()(map(s => s && s.width > 768)(size$)).subscribe(isWide => {
-        this.#engine.dispatch(new SetPaneVisibility({left: true, right: isWide}));
-      });
+    const state$ = derive(
+      [
+        fromObservable(engine.query(new Panels()), {initial: []}),
+        fromObservable(engine.query(new ActivePanelForPane('left'))),
+        fromObservable(engine.query(new ActivePanelForPane('right'))),
+        fromObservable(engine.query(new PaneVisibility())),
+      ],
+      (panels, leftId, rightId, visibility) => ({panels, leftId, rightId, visibility}),
+    );
 
-      const state$ = zip(
-        (panels, leftId, rightId, visibility) => ({
-          panels,
-          leftId,
-          rightId,
-          visibility,
-        }),
-        this.#engine.query(new Panels()),
-        this.#engine.query(new ActivePanelForPane('left')),
-        this.#engine.query(new ActivePanelForPane('right')),
-        this.#engine.query(new PaneVisibility()),
-      );
+    const renderState = ({panels, leftId, rightId, visibility}) => {
+      if (!visibility) return null;
 
-      return watch(
-        state$,
-        ({panels, leftId, rightId, visibility}) => {
-          if (!visibility) return null;
+      const leftPanels = visibility.left ? panels.filter(p => p.pane === 'left') : [];
+      const rightPanels = visibility.right ? panels.filter(p => p.pane === 'right') : [];
 
-          const leftPanels = visibility.left ? panels.filter(p => p.pane === 'left') : [];
-          const rightPanels = visibility.right ? panels.filter(p => p.pane === 'right') : [];
+      if (leftPanels.length > 0 && rightPanels.length > 0) {
+        return [renderPane('left', leftPanels, leftId), renderPane('right', rightPanels, rightId)];
+      }
+      if (visibility.left) {
+        return renderPane('left', panels, leftId);
+      }
+      if (visibility.right) {
+        return renderPane('right', panels, rightId);
+      }
+      return null;
+    };
 
-          if (leftPanels.length > 0 && rightPanels.length > 0) {
-            return [
-              renderPane('left', leftPanels, leftId),
-              renderPane('right', rightPanels, rightId),
-            ];
-          } else if (visibility.left) {
-            return renderPane('left', panels, leftId);
-          } else if (visibility.right) {
-            return renderPane('right', panels, rightId);
-          }
-          return null;
-        },
-        {
-          placeholder: () => p('Loading...'),
-        },
-      );
+    const watchOptions = {placeholder: () => p('Loading...')};
+
+    // The demo collapses to one pane on a narrow screen. Dispatching only on a
+    // crossing keeps a resize from looping through the store on every frame.
+    let lastWide = null;
+    const app = withElementSize(({width}) => {
+      const wide = width > DEMO_WIDE_BREAKPOINT;
+      if (wide !== lastWide) {
+        lastWide = wide;
+        engine.dispatch(new SetPaneVisibility(wide ? PANES_BOTH : PANES_LEFT));
+      }
+      return watch(state$, renderState, watchOptions);
     });
 
     reconcile(this.shadowRoot, [app]);

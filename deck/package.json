@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:wds": "web-dev-server --config web-dev-server.config.mjs",
+    "dev:standalone": "deck-dev",
     "build": "deck-build"
   },
   "dependencies": {
     "@3sln/deck": "file:../"
   },
   "devDependencies": {
+    "@web/dev-server": "^0.4.6",
     "vite": "^5.4.20"
   },
   "@3sln/deck": {

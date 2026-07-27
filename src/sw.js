@@ -1,55 +1,88 @@
-const CACHE_NAME = 'deck-cache-v1';
+/**
+ * Deck's service worker: an offline copy of a published deck.
+ *
+ * Strategy is network-first with a short leash. A deck is documentation, so
+ * being a version behind is worse than being a moment slower — but only up to a
+ * point, and past that point the cached copy wins. A cache-first worker would
+ * serve yesterday's card to someone who just published a fix.
+ */
 
-self.addEventListener('install', (event) => {
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    try {
-      const assetManifest = await fetch('asset-manifest.json').then(res => res.json());
-      const assets = assetManifest.files;
-      assets.push('./');
-      await cache.addAll(assets);
-    } catch (e) {
-      console.error('Failed to fetch asset-manifest.json, offline mode will not be available.', e);
-    }
-  })());
-});
+const CACHE_NAME = 'deck-cache-v2';
+const NETWORK_TIMEOUT_MS = 400;
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keyList) => {
-    return Promise.all(keyList.map((key) => {
-      if (key !== CACHE_NAME) {
-        return caches.delete(key);
+const scoped = pathname => new URL(pathname, self.registration.scope).toString();
+
+self.addEventListener('install', event => {
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      let assets;
+      try {
+        const response = await fetch(scoped('asset-manifest.json'), {cache: 'no-cache'});
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        assets = [...(await response.json()).files, './'];
+      } catch (err) {
+        console.error('Deck: no asset manifest; offline mode is unavailable.', err);
+        return;
       }
-    }));
-  }));
+
+      // One at a time rather than `cache.addAll`, which is all-or-nothing: a
+      // single asset that 404s would otherwise leave the deck with no offline
+      // copy at all, rather than an offline copy missing one file.
+      const results = await Promise.allSettled(assets.map(asset => cache.add(asset)));
+      const failed = results.filter(result => result.status === 'rejected').length;
+      if (failed > 0) {
+        console.warn(`Deck: ${failed} of ${assets.length} assets could not be cached.`);
+      }
+    })(),
+  );
 });
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)));
+      await self.clients.claim();
+    })(),
+  );
+});
+
+self.addEventListener('fetch', event => {
+  const request = event.request;
+
+  // Only same-origin GETs are ours to answer. `cache.put` throws on anything
+  // else, and taking over a cross-origin request buys nothing.
+  if (request.method !== 'GET') return;
+  if (new URL(request.url).origin !== self.location.origin) return;
+
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
-      const cachedResponse = await cache.match(event.request);
 
-      const networkPromise = fetch(event.request).then(networkResponse => {
-        if (networkResponse.ok) {
-          cache.put(event.request, networkResponse.clone());
+      const network = fetch(request).then(response => {
+        if (response.ok && response.type === 'basic') {
+          // Cloned before the body is read: a response body can only be
+          // consumed once, and the caller is about to consume this one.
+          cache.put(request, response.clone()).catch(() => {});
         }
-        return networkResponse;
+        return response;
       });
 
-      const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 400));
-      
+      const timeout = new Promise(resolve => setTimeout(() => resolve(null), NETWORK_TIMEOUT_MS));
+
       try {
-        const firstResponse = await Promise.race([networkPromise, timeoutPromise]);
-        if (firstResponse) {
-          return firstResponse; // Network was fast enough
-        }
-      } catch(e) {
-        // networkPromise rejected before timeout, fall through to cache
+        const winner = await Promise.race([network, timeout]);
+        if (winner) return winner;
+      } catch {
+        // The network failed outright; fall through to the cache.
       }
 
-      // If network is slow or failed, return from cache if available, otherwise wait for network.
-      return cachedResponse || networkPromise;
-    })()
+      const cached = await cache.match(request);
+      if (cached) return cached;
+
+      // Nothing cached: the slow network response is the only answer there is.
+      return await network;
+    })(),
   );
 });

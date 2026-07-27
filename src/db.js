@@ -1,5 +1,19 @@
+/**
+ * The client-side card store: an IndexedDB database of card bodies plus an
+ * inverted index over them.
+ *
+ * The inverted index here is the *fallback* search. When a precompiled index is
+ * available (see `search-index.js`) deck searches that instead, and cards are
+ * stored without being indexed at all — which matters, because indexing a card
+ * writes one row per distinct word in it, and a published deck can hold
+ * thousands of cards. In dev there is no precompiled index, so this is the only
+ * search there is and every card is indexed as it arrives.
+ */
+
+import {tokenize, scoreCard} from './tokenize.js';
+
 const DB_NAME = 'deck-db';
-const DB_VERSION = 3; // Bump version for schema change
+const DB_VERSION = 3;
 const CARDS_STORE = 'cards';
 const INDEX_STORE = 'searchIndex';
 
@@ -12,6 +26,23 @@ function promisifyRequest(request) {
   });
 }
 
+/**
+ * Resolves when the transaction commits, rejecting if it aborts.
+ *
+ * Every write path waits on this rather than on its last request. A request
+ * succeeding only means the request succeeded; the transaction can still abort
+ * afterwards (quota, a failed constraint elsewhere in the same transaction),
+ * and a card reported as stored but rolled back is a card that silently never
+ * loads again until the next prune.
+ */
+function transactionDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 function initDB() {
   if (dbPromise) return dbPromise;
 
@@ -20,12 +51,9 @@ function initDB() {
 
     openRequest.onupgradeneeded = event => {
       const db = event.target.result;
-      let cardsStore;
-      if (!db.objectStoreNames.contains(CARDS_STORE)) {
-        cardsStore = db.createObjectStore(CARDS_STORE, {keyPath: 'path'});
-      } else {
-        cardsStore = event.target.transaction.objectStore(CARDS_STORE);
-      }
+      const cardsStore = db.objectStoreNames.contains(CARDS_STORE)
+        ? event.target.transaction.objectStore(CARDS_STORE)
+        : db.createObjectStore(CARDS_STORE, {keyPath: 'path'});
 
       if (!cardsStore.indexNames.contains('by-updatedAt')) {
         cardsStore.createIndex('by-updatedAt', 'updatedAt');
@@ -41,16 +69,17 @@ function initDB() {
       }
     };
 
-    openRequest.onsuccess = event => resolve(event.target.result);
+    openRequest.onsuccess = event => {
+      const db = event.target.result;
+      // Another tab bumping the schema would otherwise leave this connection
+      // blocking its upgrade forever.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     openRequest.onerror = event => reject(event.target.error);
   });
 
   return dbPromise;
-}
-
-function tokenize(text) {
-  if (!text) return [];
-  return text.toLowerCase().match(/\w+/g) || [];
 }
 
 function getTextContent(html) {
@@ -58,61 +87,56 @@ function getTextContent(html) {
   return new DOMParser().parseFromString(html, 'text/html').body.textContent || '';
 }
 
-async function upsertCard(card) {
+async function clearIndexFor(indexStore, path) {
+  const keys = await promisifyRequest(
+    indexStore.index('by-path').getAllKeys(IDBKeyRange.only(path)),
+  );
+  for (const key of keys) indexStore.delete(key);
+}
+
+/**
+ * Stores a card, replacing any previous copy.
+ *
+ * `index` decides whether the card also goes into the inverted index. Pass
+ * false when a precompiled index is in play: the rows would never be read, and
+ * writing them is the single most expensive thing deck does on a cold load.
+ */
+async function upsertCard(card, {index = true} = {}) {
   const db = await initDB();
   const tx = db.transaction([CARDS_STORE, INDEX_STORE], 'readwrite');
   const cardsStore = tx.objectStore(CARDS_STORE);
   const indexStore = tx.objectStore(INDEX_STORE);
 
   const existing = await promisifyRequest(cardsStore.get(card.path));
-
   if (existing) {
-    const pathIndex = indexStore.index('by-path');
-    const oldIndexKeys = await promisifyRequest(pathIndex.getAllKeys(IDBKeyRange.only(card.path)));
-    await Promise.all(oldIndexKeys.map(key => promisifyRequest(indexStore.delete(key))));
+    await clearIndexFor(indexStore, card.path);
   }
 
   const now = Date.now();
-  const newCard = {...card, updatedAt: now, usedAt: existing?.usedAt || now};
-  const titleTokens = tokenize(newCard.title);
-  const summaryTokens = tokenize(newCard.summary);
-  const bodyText = getTextContent(newCard.body);
-  const bodyTokens = tokenize(bodyText);
+  const newCard = {...card, updatedAt: now, usedAt: existing?.usedAt ?? now};
 
-  const wordScores = new Map();
-  const uniqueBodyWords = new Set(bodyTokens);
-  const uniqueTitleWords = new Set(titleTokens);
-  const uniqueSummaryWords = new Set(summaryTokens);
+  if (index) {
+    const scores = scoreCard({
+      title: newCard.title,
+      summary: newCard.summary,
+      body: getTextContent(newCard.body),
+    });
+    for (const [word, score] of scores) {
+      indexStore.put({word, path: newCard.path, score});
+    }
+  }
 
-  uniqueBodyWords.forEach(word => {
-    const tf = bodyTokens.filter(t => t === word).length;
-    let score = tf;
-    if (uniqueTitleWords.has(word)) score += 1;
-    if (uniqueSummaryWords.has(word)) score += 1;
-    wordScores.set(word, score);
-  });
-
-  await Promise.all(
-    Array.from(wordScores.entries()).map(([word, score]) => {
-      return promisifyRequest(indexStore.put({word, path: newCard.path, score}));
-    }),
-  );
-
-  await promisifyRequest(cardsStore.put(newCard));
+  cardsStore.put(newCard);
+  await transactionDone(tx);
   return newCard;
 }
 
 async function removeCard(path) {
   const db = await initDB();
   const tx = db.transaction([CARDS_STORE, INDEX_STORE], 'readwrite');
-  const cardsStore = tx.objectStore(CARDS_STORE);
-  const indexStore = tx.objectStore(INDEX_STORE);
-
-  const pathIndex = indexStore.index('by-path');
-  const indexKeysToDelete = await promisifyRequest(pathIndex.getAllKeys(IDBKeyRange.only(path)));
-  await Promise.all(indexKeysToDelete.map(key => promisifyRequest(indexStore.delete(key))));
-
-  await promisifyRequest(cardsStore.delete(path));
+  await clearIndexFor(tx.objectStore(INDEX_STORE), path);
+  tx.objectStore(CARDS_STORE).delete(path);
+  await transactionDone(tx);
 }
 
 function levenshtein(a, b) {
@@ -143,6 +167,14 @@ function levenshtein(a, b) {
   return matrix[b.length][a.length];
 }
 
+/**
+ * Searches the locally indexed cards.
+ *
+ * Results come back ranked by score, ties broken by how recently the card was
+ * opened. Ranking by recency alone — which is what sorting the scored list by
+ * `usedAt` amounts to — throws away the ranking the index just computed and
+ * makes the best match land wherever it happens to land.
+ */
 async function findCardsByQuery(query, limit = 100) {
   const db = await initDB();
   const searchTokens = tokenize(query);
@@ -157,8 +189,7 @@ async function findCardsByQuery(query, limit = 100) {
 
   await Promise.all(
     searchTokens.map(async word => {
-      const request = wordIndex.getAll(IDBKeyRange.only(word));
-      const results = await promisifyRequest(request);
+      const results = await promisifyRequest(wordIndex.getAll(IDBKeyRange.only(word)));
       results.forEach(({path, score}) => {
         pathScores.set(path, (pathScores.get(path) || 0) + score);
       });
@@ -166,24 +197,20 @@ async function findCardsByQuery(query, limit = 100) {
   );
 
   if (pathScores.size > 0) {
-    const sortedPaths = Array.from(pathScores.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(entry => entry[0])
-      .slice(0, limit);
-
-    const cards = await Promise.all(
-      sortedPaths.map(path => promisifyRequest(cardsStore.get(path))),
-    );
-    return cards.filter(Boolean).sort((a, b) => b.usedAt - a.usedAt);
+    const ranked = [...pathScores.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+    const cards = await Promise.all(ranked.map(([path]) => promisifyRequest(cardsStore.get(path))));
+    return cards
+      .map((card, i) => (card ? {card, score: ranked[i][1]} : null))
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score || b.card.usedAt - a.card.usedAt)
+      .map(item => item.card);
   }
 
-  // Fallback to aggregated word-by-word distance search
-  console.log('No index match, falling back to word-distance search...');
+  // Nothing matched a whole word. Fall back to a fuzzy pass over titles and
+  // summaries, which is what catches a half-typed or slightly misspelled query.
   const allCards = await promisifyRequest(cardsStore.getAll());
   const cardScores = allCards.map(card => {
-    const titleTokens = tokenize(card.title);
-    const summaryTokens = tokenize(card.summary);
-    const searchableTokens = [...new Set([...titleTokens, ...summaryTokens])];
+    const searchableTokens = [...new Set([...tokenize(card.title), ...tokenize(card.summary)])];
     let totalScore = 0;
 
     searchTokens.forEach(queryWord => {
@@ -197,7 +224,7 @@ async function findCardsByQuery(query, limit = 100) {
           const shortWord = queryWord.length > searchableWord.length ? searchableWord : queryWord;
 
           if (longWord.length > 7 && shortWord.length < longWord.length / 2) {
-            currentScore = 0; // Skip this match
+            currentScore = 0; // Too far apart to be a typo; skip.
           } else {
             const distance = levenshtein(queryWord, searchableWord);
             if (distance <= 2) {
@@ -217,13 +244,8 @@ async function findCardsByQuery(query, limit = 100) {
 
   return cardScores
     .filter(item => item.score > 0)
-    .sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
-      return b.card.usedAt - a.card.usedAt;
-    })
-    .slice(0, 20)
+    .sort((a, b) => b.score - a.score || b.card.usedAt - a.card.usedAt)
+    .slice(0, limit)
     .map(item => item.card);
 }
 
@@ -254,7 +276,25 @@ async function getRecentCards(limit = 100) {
 
 async function getCard(path) {
   const db = await initDB();
-  return await promisifyRequest(db.transaction(CARDS_STORE).objectStore(CARDS_STORE).get(path));
+  const tx = db.transaction(CARDS_STORE, 'readonly');
+  return await promisifyRequest(tx.objectStore(CARDS_STORE).get(path));
+}
+
+/** Bulk `getCard`, in one transaction. Missing paths come back as undefined. */
+async function getCards(paths) {
+  if (paths.length === 0) return [];
+  const db = await initDB();
+  const tx = db.transaction(CARDS_STORE, 'readonly');
+  const store = tx.objectStore(CARDS_STORE);
+  return await Promise.all(paths.map(path => promisifyRequest(store.get(path))));
+}
+
+/** The hash of every stored card, so a load can skip cards that are current. */
+async function getStoredHashes() {
+  const db = await initDB();
+  const tx = db.transaction(CARDS_STORE, 'readonly');
+  const cards = await promisifyRequest(tx.objectStore(CARDS_STORE).getAll());
+  return new Map(cards.map(card => [card.path, card.hash]));
 }
 
 async function touchCard(path) {
@@ -264,8 +304,9 @@ async function touchCard(path) {
   const card = await promisifyRequest(store.get(path));
   if (card) {
     card.usedAt = Date.now();
-    await promisifyRequest(store.put(card));
+    store.put(card);
   }
+  await transactionDone(tx);
 }
 
 async function pruneCards(livePaths) {
@@ -273,21 +314,19 @@ async function pruneCards(livePaths) {
   const tx = db.transaction([CARDS_STORE, INDEX_STORE], 'readwrite');
   const cardsStore = tx.objectStore(CARDS_STORE);
   const indexStore = tx.objectStore(INDEX_STORE);
-  const pathIndex = indexStore.index('by-path');
 
   const dbPaths = await promisifyRequest(cardsStore.getAllKeys());
   const livePathsSet = new Set(livePaths);
 
   const stalePaths = dbPaths.filter(path => !livePathsSet.has(path));
-  if (stalePaths.length === 0) return;
-
-  console.log(`Pruning ${stalePaths.length} stale cards...`);
+  if (stalePaths.length === 0) return [];
 
   for (const path of stalePaths) {
-    const indexKeysToDelete = await promisifyRequest(pathIndex.getAllKeys(IDBKeyRange.only(path)));
-    await Promise.all(indexKeysToDelete.map(key => promisifyRequest(indexStore.delete(key))));
-    await promisifyRequest(cardsStore.delete(path));
+    await clearIndexFor(indexStore, path);
+    cardsStore.delete(path);
   }
+  await transactionDone(tx);
+  return stalePaths;
 }
 
 export {
@@ -297,6 +336,8 @@ export {
   findCardsByQuery,
   getRecentCards,
   getCard,
+  getCards,
+  getStoredHashes,
   pruneCards,
   touchCard,
 };

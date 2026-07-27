@@ -7,7 +7,7 @@ Deck is configured through a `@3sln/deck` field in your project's `package.json`
 Deck uses a simple override system for configuration. You can define a base configuration at the root of the `@3sln/deck` object. Then, you can create `dev` and `build` sub-objects to override any of those settings for a specific environment.
 
 -   **Root Configuration**: The base settings used by both environments.
--   **`dev` Block**: Overrides for the development server (`vite`).
+-   **`dev` Block**: Overrides for the development server (`deck-dev`, or whichever dev server plugin you use).
 -   **`build` Block**: Overrides for the production build (`deck-build`).
 
 When Deck loads, it merges the root configuration with the environment-specific block. For example, when running the `deck-build` command, Deck will merge the root `{...}` options with the `build: {...}` options.
@@ -23,6 +23,19 @@ Any of the following options can be placed at the root or within the `dev` and `
 -   `importMap` (object): An [import map](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap) to be included in the `index.html`. This is essential for remapping module specifiers, especially for demos.
 
 -   `outDir` (string): The output directory for the built site, relative to the project root. This is primarily useful in the `build` block. Defaults to `out`.
+
+-   `esbuild` (object): Options passed to esbuild when it bundles your `<deck-demo>` modules — `alias`, `define`, `loader`, `tsconfig`, `jsxImportSource` and friends. Under the Vite plugin a demo is resolved by your own Vite config and this is not needed; every other dev server, and the build, bundle demos with esbuild and would otherwise not know what `@app/button` refers to.
+
+    ```json
+    {
+      "@3sln/deck": {
+        "esbuild": {
+          "alias": {"@app": "./src"},
+          "define": {"__DEV__": "true"}
+        }
+      }
+    }
+    ```
 
 -   `pick` (object): A map of source paths to destination paths, allowing you to copy files or directories into the build output. This is primarily useful in the `build` block to include assets or dependencies for your static site.
 

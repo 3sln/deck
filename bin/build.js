@@ -1,194 +1,310 @@
 #!/usr/bin/env node
 
-import {build as viteBuild} from 'vite';
+/**
+ * Builds a published deck: a static directory that any file server can host.
+ *
+ * The app is bundled with esbuild rather than with Vite. Deck used to be a Vite
+ * plugin and could reasonably lean on Vite for both jobs; now that a deck can
+ * be developed under @web/dev-server just as well, requiring the whole of Vite
+ * to *publish* one would be a dependency nobody asked for. Deck's own client
+ * source is plain ESM for the same reason — see `bin/vendor-themes.js`.
+ */
+
+import * as esbuild from 'esbuild';
 import fs from 'fs-extra';
-import path from 'path';
-import {createRequire} from 'module';
-import { sha256, loadDeckConfig, getProjectFiles, getCardFiles, getHtmlTemplate } from '../src/config.js';
-
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {marked} from 'marked';
-const require = createRequire(import.meta.url);
 
-// --- Path Resolution ---
+import {
+  sha256,
+  loadDeckConfig,
+  getProjectFiles,
+  getCardFiles,
+  getHtmlTemplate,
+  toWebPath,
+} from '../src/config.js';
+import {extractCard} from '../src/card-text.js';
+import {scoreCard} from '../src/tokenize.js';
+import {encodeIndex, INDEX_FILE} from '../src/search-index.js';
+import {demoBuildOptions} from '../src/dev-core.js';
+
 const userRoot = process.cwd();
-// outDir is now resolved inside build()
-const deckPluginPath = require.resolve('@3sln/deck/vite-plugin');
-const deckRoot = path.dirname(deckPluginPath);
+const deckRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-// --- Main Build Function ---
-async function build() {
-  try {
-    console.log('Starting Deck build...');
+const DEMO_TAG = /<deck-demo\s+[^>]*src="([^"]+)"[^>]*><\/deck-demo>/g;
+const FENCE = /^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1\2[^\n]*$/gm;
+const DEMO_BUNDLE_DIR = 'assets/demos';
 
-    const config = await loadDeckConfig(userRoot);
-    const buildConfig = config.build || {};
+/**
+ * The demo tags a card actually embeds — not the ones it merely writes about.
+ *
+ * A card documenting `<deck-demo>` shows the tag in a fenced code block, and a
+ * naive scan treats that example as a real embed: it warns that the file is
+ * missing and, worse, would rewrite the example the reader is meant to copy.
+ */
+function demoTagsIn(content) {
+  const fences = [...content.matchAll(FENCE)].map(m => [m.index, m.index + m[0].length]);
+  const inFence = index => fences.some(([start, end]) => index >= start && index < end);
+  return [...content.matchAll(DEMO_TAG)].filter(match => !inFence(match.index));
+}
 
-    const outDir = path.resolve(userRoot, buildConfig.outDir || 'out');
-    const assetsDir = path.resolve(outDir, 'assets');
+/**
+ * Bundles every demo module a card references, and points the card at the
+ * bundle.
+ *
+ * A demo is ordinary application code and imports the way application code
+ * does — `import * as d from '@3sln/dodo'`. In dev that works because the dev
+ * server bundles demos on request; published, the browser was handed the file
+ * as written and refused it, because a bare specifier means nothing to a
+ * browser. The demo panel showed "Could not load demo module" and the card
+ * around it looked fine, which is why this survived as long as it did.
+ *
+ * The original file is still copied and still what the Source panel shows —
+ * that is what `canonical-src` is for. Readers see the code that was written,
+ * not the code that was bundled.
+ */
+async function bundleDemos(content, {userRoot, outDir, bundled, esbuildOptions}) {
+  let result = content;
 
-    // Clean output directory
-    await fs.emptyDir(outDir);
-    console.log(`Cleaned ${outDir}`);
+  for (const match of demoTagsIn(content)) {
+    const src = match[1];
+    if (match[0].includes('canonical-src=')) continue;
 
-    // Bundle the deck application using Vite's JS API
-    console.log('Bundling application assets...');
-    const viteManifest = await viteBuild({
-      configFile: false,
-      root: deckRoot,
-      build: {
-        outDir: assetsDir,
-        manifest: true,
-        lib: {
-          entry: path.resolve(deckRoot, 'src/main.js'),
-          name: 'DeckApp',
-          fileName: 'deck-app',
-          formats: ['es'],
-        },
-      },
+    const relative = src.replace(/^\//, '');
+    const entry = path.resolve(userRoot, relative);
+    if (!(await fs.pathExists(entry))) {
+      console.warn(`Warning: <deck-demo src="${src}"> does not exist; leaving it as written.`);
+      continue;
+    }
+
+    const outFile = `/${DEMO_BUNDLE_DIR}/${relative.replace(/[\\/]/g, '__')}`;
+    if (!bundled.has(src)) {
+      await esbuild.build({
+        entryPoints: [entry],
+        absWorkingDir: userRoot,
+        outfile: path.resolve(outDir, outFile.replace(/^\//, '')),
+        bundle: true,
+        format: 'esm',
+        platform: 'browser',
+        target: ['es2022'],
+        minify: true,
+        logOverride: {'unsupported-dynamic-import': 'silent'},
+        ...demoBuildOptions(esbuildOptions),
+      });
+      bundled.set(src, outFile);
+    }
+
+    const rewritten = match[0].replace(`src="${src}"`, `src="${outFile}" canonical-src="${src}"`);
+    result = result.replace(match[0], rewritten);
+  }
+
+  return result;
+}
+
+/**
+ * Replaces `<deck-demo>` tags with the demo's source, for the agent index.
+ *
+ * A card that says "here is a live demo" is useless to something that cannot
+ * run one. Inlining the script is what makes `agents.md` a complete account of
+ * the deck rather than a table of contents with holes in it.
+ */
+async function inlineDemos(content, outDir) {
+  const replacements = [];
+  for (const match of demoTagsIn(content)) {
+    const src = match[1];
+    const relativePath = src.startsWith('/') ? src.slice(1) : src;
+    const demoFilePath = path.resolve(outDir, relativePath);
+
+    if (!(await fs.pathExists(demoFilePath))) {
+      console.warn(`Warning: could not find demo file for ${src}`);
+      continue;
+    }
+    const demoContent = await fs.readFile(demoFilePath, 'utf-8');
+    replacements.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      replacement: `\n\n### Demo Code (${src})\n\n\`\`\`javascript\n${demoContent}\n\`\`\`\n\n`,
     });
-    console.log('Application assets bundled.');
+  }
 
-    // Find and copy all project files
-    console.log('Copying project files...');
-    const filesToCopy = getProjectFiles(userRoot, buildConfig);
-    for (const file of filesToCopy) {
-      const source = path.resolve(userRoot, file);
-      const dest = path.resolve(outDir, file);
-      await fs.ensureDir(path.dirname(dest));
-      await fs.copy(source, dest);
-    }
-    console.log(`Copied ${filesToCopy.length} files.`);
+  // Applied back to front so an earlier replacement cannot move a later index.
+  let result = content;
+  for (let i = replacements.length - 1; i >= 0; i--) {
+    const {start, end, replacement} = replacements[i];
+    result = result.slice(0, start) + replacement + result.slice(end);
+  }
+  return result;
+}
 
-    // Copy picked static assets
+async function bundleApp(assetsDir) {
+  const result = await esbuild.build({
+    entryPoints: [path.resolve(deckRoot, 'src/main.js')],
+    absWorkingDir: deckRoot,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: ['es2022'],
+    minify: true,
+    metafile: true,
+    outdir: assetsDir,
+    entryNames: 'deck-app-[hash]',
+    // A demo module's URL is only known at runtime, and deck's dev channel only
+    // exists under a dev server. Both are meant to stay outside the bundle.
+    logOverride: {'unsupported-dynamic-import': 'silent'},
+  });
+
+  const entry = Object.entries(result.metafile.outputs).find(([, output]) => output.entryPoint);
+  if (!entry) throw new Error('esbuild produced no entry chunk for the deck app.');
+
+  const outputs = Object.keys(result.metafile.outputs).map(file =>
+    toWebPath(path.relative(path.dirname(assetsDir), path.resolve(deckRoot, file))),
+  );
+
+  return {
+    entryFile: toWebPath(path.relative(path.dirname(assetsDir), path.resolve(deckRoot, entry[0]))),
+    outputs,
+  };
+}
+
+async function build() {
+  console.log('Starting Deck build...');
+
+  const config = await loadDeckConfig(userRoot);
+  const buildConfig = config.build;
+
+  const outDir = path.resolve(userRoot, buildConfig.outDir);
+  const assetsDir = path.resolve(outDir, 'assets');
+
+  await fs.emptyDir(outDir);
+  console.log(`Cleaned ${outDir}`);
+
+  console.log('Bundling application assets...');
+  const {entryFile, outputs} = await bundleApp(assetsDir);
+  console.log(`Application bundled to ${entryFile}`);
+
+  console.log('Copying project files...');
+  const filesToCopy = getProjectFiles(userRoot, buildConfig);
+  for (const file of filesToCopy) {
+    const source = path.resolve(userRoot, file);
+    const dest = path.resolve(outDir, file);
+    await fs.ensureDir(path.dirname(dest));
+    await fs.copy(source, dest);
+  }
+  console.log(`Copied ${filesToCopy.length} files.`);
+
+  if (buildConfig.pick && Object.keys(buildConfig.pick).length > 0) {
     console.log('Copying picked assets...');
-    if (buildConfig.pick) {
-        for (const [source, dest] of Object.entries(buildConfig.pick)) {
-            const sourcePath = path.resolve(userRoot, source);
-            const destPath = path.resolve(outDir, dest);
-            if (fs.existsSync(sourcePath)) {
-                console.log(`Picking '${source}' to '${dest}'...`);
-                await fs.copy(sourcePath, destPath, { dereference: true });
-            } else {
-                console.warn(`Source path for 'pick' not found: ${sourcePath}`);
-            }
-        }
+    for (const [source, dest] of Object.entries(buildConfig.pick)) {
+      const sourcePath = path.resolve(userRoot, source);
+      const destPath = path.resolve(outDir, dest);
+      if (await fs.pathExists(sourcePath)) {
+        console.log(`Picking '${source}' to '${dest}'...`);
+        await fs.copy(sourcePath, destPath, {dereference: true});
+      } else {
+        console.warn(`Source path for 'pick' not found: ${sourcePath}`);
+      }
     }
+  }
 
-    // Find card paths and hash content for the index
-    const cardFiles = getCardFiles(userRoot, buildConfig);
-    
-    let allCardsContent = "# Agents Index\n\nThis file contains the concatenated content of all cards to help LLMs understand the available documentation.\n\n";
+  const cardFiles = getCardFiles(userRoot, buildConfig);
+  let agentsIndex =
+    '# Agents Index\n\n' +
+    'This file contains the concatenated content of all cards to help LLMs ' +
+    'understand the available documentation.\n\n';
 
-    const initialCardsData = await Promise.all(cardFiles.map(async (file) => {
-        const filePath = path.resolve(outDir, file);
-        let content = await fs.readFile(filePath, 'utf-8');
-        const hash = await sha256(content);
+  const cards = [];
+  const bundledDemos = new Map();
+  for (const file of cardFiles) {
+    const filePath = path.resolve(outDir, file);
+    const raw = await fs.readFile(filePath, 'utf-8');
 
-        // Extract title
-        const tokens = marked.lexer(content);
-        const heading = tokens.find(t => t.type === 'heading' && t.depth === 1);
-        const title = heading ? heading.text : path.basename(file, path.extname(file));
+    // The agent index gets the card as written, demo sources and all. The
+    // browser gets a copy whose demo tags point at bundles.
+    agentsIndex += `\n\n---\n\n# ${extractCard(file, raw).title} (${toWebPath(file)})\n\n${await inlineDemos(raw, outDir)}`;
 
-        // Process deck-demo tags
-        const demoRegex = /<deck-demo\s+[^>]*src="([^"]+)"[^>]*><\/deck-demo>/g;
-        // Use a loop or replace with async handling if possible, but replace expects sync.
-        // Since we are inside an async map, we can process matches before appending.
-        
-        let match;
-        const replacements = [];
-        while ((match = demoRegex.exec(content)) !== null) {
-            const fullTag = match[0];
-            const src = match[1];
-            try {
-                // src is typically absolute web path like /demos/foo.js. Remove leading slash for filesystem resolve.
-                const relativePath = src.startsWith('/') ? src.slice(1) : src;
-                const demoFilePath = path.resolve(outDir, relativePath);
-                
-                if (await fs.exists(demoFilePath)) {
-                    const demoContent = await fs.readFile(demoFilePath, 'utf-8');
-                    const replacement = `\n\n### Demo Code (${src})\n\n\`\`\`javascript\n${demoContent}\n\`\`\`\n\n`;
-                    replacements.push({start: match.index, end: match.index + fullTag.length, replacement});
-                } else {
-                     console.warn(`Warning: Could not find demo file: ${demoFilePath}`);
-                }
-            } catch (err) {
-                console.warn(`Error processing demo ${src}:`, err);
-            }
-        }
+    const served = await bundleDemos(raw, {
+      userRoot,
+      outDir,
+      bundled: bundledDemos,
+      esbuildOptions: buildConfig.esbuild,
+    });
+    if (served !== raw) await fs.writeFile(filePath, served);
 
-        // Apply replacements in reverse order to preserve indices
-        for (let i = replacements.length - 1; i >= 0; i--) {
-            const {start, end, replacement} = replacements[i];
-            content = content.substring(0, start) + replacement + content.substring(end);
-        }
+    // Hashed and indexed from what is actually served, so the browser's copy
+    // and the index describe the same bytes.
+    const hash = await sha256(served);
+    const {title, summary, text} = extractCard(file, served);
 
-        allCardsContent += `\n\n---\n\n# ${title} (/${file})\n\n${content}`;
+    cards.push({
+      path: toWebPath(file),
+      hash,
+      title,
+      summary,
+      scores: scoreCard({title, summary, body: text}),
+    });
+  }
+  console.log(`Found and processed ${cards.length} cards.`);
+  if (bundledDemos.size > 0) {
+    console.log(`Bundled ${bundledDemos.size} demo module(s).`);
+  }
 
-        return { path: `/${file}`, hash, title };
-    }));
-    console.log(`Found and processed ${initialCardsData.length} cards.`);
-
-    // Write agents.md
-    console.log('Generating agents.md...');
-    await fs.writeFile(path.resolve(outDir, 'agents.md'), allCardsContent);
-    console.log('agents.md generated.');
-
-    // Write agents.html
-    console.log('Generating agents.html...');
-    const agentsHtmlContent = marked.parse(allCardsContent);
-    const agentsHtml = `<!doctype html>
-<html>
+  console.log('Writing agents.md and agents.html...');
+  await fs.writeFile(path.resolve(outDir, 'agents.md'), agentsIndex);
+  await fs.writeFile(
+    path.resolve(outDir, 'agents.html'),
+    `<!doctype html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <title>Agents Index</title>
 </head>
 <body>
-${agentsHtmlContent}
+${marked.parse(agentsIndex)}
 </body>
-</html>`;
-    await fs.writeFile(path.resolve(outDir, 'agents.html'), agentsHtml);
-    console.log('agents.html generated.');
+</html>`,
+  );
 
-    // Generate asset manifest for service worker
-    console.log('Generating asset manifest...');
-    const manifest = await fs.readJson(path.resolve(assetsDir, '.vite/manifest.json'));
-    const bundledAssets = Object.values(manifest).flatMap(chunk => [chunk.file, ...(chunk.css || [])]).map(file => `/assets/${file}`);
-    const assetManifest = {
-        files: [...filesToCopy.map(f => `/${f}`), ...bundledAssets]
-    };
-    await fs.writeJson(path.resolve(outDir, 'asset-manifest.json'), assetManifest);
-    console.log('Asset manifest generated.');
+  // The precompiled index. The browser downloads this before any card, which is
+  // what lets the very first search cover the whole deck instead of covering
+  // whatever happened to have finished downloading.
+  console.log('Building search index...');
+  const searchIndex = encodeIndex(cards);
+  await fs.writeJson(path.resolve(outDir, INDEX_FILE), searchIndex);
+  const indexBytes = (await fs.stat(path.resolve(outDir, INDEX_FILE))).size;
+  console.log(
+    `Search index: ${cards.length} cards, ${Object.keys(searchIndex.terms).length} terms, ` +
+      `${(indexBytes / 1024).toFixed(1)} kB.`,
+  );
 
-    // Copy service worker
-    await fs.copy(path.resolve(deckRoot, 'src/sw.js'), path.resolve(outDir, 'sw.js'));
+  console.log('Generating asset manifest...');
+  await fs.writeJson(path.resolve(outDir, 'asset-manifest.json'), {
+    files: [...filesToCopy.map(toWebPath), ...outputs, ...bundledDemos.values(), `/${INDEX_FILE}`],
+  });
 
-    // Generate the final index.html
-    console.log('Generating production index.html...');
-    const entryFile = manifest['src/main.js']?.file;
-    const cssFiles = manifest['src/main.js']?.css || [];
+  await fs.copy(path.resolve(deckRoot, 'src/sw.js'), path.resolve(outDir, 'sw.js'));
 
-    if (!entryFile) {
-      throw new Error('Could not find entry file in Vite manifest.');
-    }
+  console.log('Generating production index.html...');
+  await fs.writeFile(
+    path.resolve(outDir, 'index.html'),
+    getHtmlTemplate({
+      title: buildConfig.title,
+      importMap: buildConfig.importMap,
+      initialCardsData: cards.map(({path: cardPath, hash}) => ({path: cardPath, hash})),
+      pinnedCardPaths: buildConfig.pinned,
+      entryFile,
+      favicon: buildConfig.favicon,
+      scripts: buildConfig.scripts,
+      stylesheets: buildConfig.stylesheets,
+      searchIndexUrl: `/${INDEX_FILE}`,
+      dev: false,
+    }),
+  );
 
-    const html = getHtmlTemplate({
-        title: buildConfig.title,
-        importMap: buildConfig.importMap,
-        initialCardsData,
-        pinnedCardPaths: buildConfig.pinned,
-        entryFile: `/assets/${entryFile}`,
-        cssFiles,
-        favicon: buildConfig.favicon,
-        scripts: buildConfig.scripts,
-        stylesheets: buildConfig.stylesheets,
-    });
-
-    await fs.writeFile(path.resolve(outDir, 'index.html'), html);
-    console.log('Production index.html generated.');
-    console.log('Build complete!');
-  } catch (e) {
-    console.error('Deck build failed:', e);
-    process.exit(1);
-  }
+  console.log('Build complete!');
 }
 
-build();
+build().catch(err => {
+  console.error('Deck build failed:', err);
+  process.exit(1);
+});
