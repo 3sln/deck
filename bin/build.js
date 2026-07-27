@@ -29,26 +29,12 @@ import {scoreCard} from '../src/tokenize.js';
 import {encodeIndex, INDEX_FILE} from '../src/search-index.js';
 import {demoBuildOptions} from '../src/dev-core.js';
 import {robotsTxt, sitemapXml, llmsTxt} from '../src/discovery.js';
+import {demoTagsIn, withAttribute} from '../src/demo-tags.js';
 
 const userRoot = process.cwd();
 const deckRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-const DEMO_TAG = /<deck-demo\s+[^>]*src="([^"]+)"[^>]*><\/deck-demo>/g;
-const FENCE = /^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1\2[^\n]*$/gm;
 const DEMO_BUNDLE_DIR = 'assets/demos';
-
-/**
- * The demo tags a card actually embeds — not the ones it merely writes about.
- *
- * A card documenting `<deck-demo>` shows the tag in a fenced code block, and a
- * naive scan treats that example as a real embed: it warns that the file is
- * missing and, worse, would rewrite the example the reader is meant to copy.
- */
-function demoTagsIn(content) {
-  const fences = [...content.matchAll(FENCE)].map(m => [m.index, m.index + m[0].length]);
-  const inFence = index => fences.some(([start, end]) => index >= start && index < end);
-  return [...content.matchAll(DEMO_TAG)].filter(match => !inFence(match.index));
-}
 
 /**
  * Bundles every demo module a card references, and points the card at the
@@ -66,11 +52,12 @@ function demoTagsIn(content) {
  * not the code that was bundled.
  */
 async function bundleDemos(content, {userRoot, outDir, bundled, esbuildOptions}) {
+  const esbuild = await import('esbuild');
   let result = content;
 
-  for (const match of demoTagsIn(content)) {
-    const src = match[1];
-    if (match[0].includes('canonical-src=')) continue;
+  for (const {tag, attributes} of demoTagsIn(content)) {
+    const src = attributes.src;
+    if (!src) continue;
 
     const relative = src.replace(/^\//, '');
     const entry = path.resolve(userRoot, relative);
@@ -96,8 +83,14 @@ async function bundleDemos(content, {userRoot, outDir, bundled, esbuildOptions})
       bundled.set(src, outFile);
     }
 
-    const rewritten = match[0].replace(`src="${src}"`, `src="${outFile}" canonical-src="${src}"`);
-    result = result.replace(match[0], rewritten);
+    // An author who set their own `canonical-src` keeps it — that is the whole
+    // point of the attribute, and it is what the Source panel shows. Only when
+    // there is none does the original `src` become the canonical one.
+    let rewritten = withAttribute(tag, 'src', outFile);
+    if (!attributes['canonical-src']) {
+      rewritten = withAttribute(rewritten, 'canonical-src', src);
+    }
+    result = result.replace(tag, rewritten);
   }
 
   return result;
@@ -112,8 +105,12 @@ async function bundleDemos(content, {userRoot, outDir, bundled, esbuildOptions})
  */
 async function inlineDemos(content, outDir) {
   const replacements = [];
-  for (const match of demoTagsIn(content)) {
-    const src = match[1];
+  for (const {tag, index, attributes} of demoTagsIn(content)) {
+    // The source a reader would want is the one the demo was written in, which
+    // is exactly what `canonical-src` names when it is there.
+    const src = attributes['canonical-src'] ?? attributes.src;
+    if (!src) continue;
+
     const relativePath = src.startsWith('/') ? src.slice(1) : src;
     const demoFilePath = path.resolve(outDir, relativePath);
 
@@ -123,8 +120,8 @@ async function inlineDemos(content, outDir) {
     }
     const demoContent = await fs.readFile(demoFilePath, 'utf-8');
     replacements.push({
-      start: match.index,
-      end: match.index + match[0].length,
+      start: index,
+      end: index + tag.length,
       replacement: `\n\n### Demo Code (${src})\n\n\`\`\`javascript\n${demoContent}\n\`\`\`\n\n`,
     });
   }
