@@ -47,8 +47,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@3sln/dodo": "github:3sln/dodo#main",
-    "@3sln/ngin": "github:3sln/ngin#main",
+    "@3sln/dodo": "^0.0.10",
+    "@3sln/ngin": "^0.0.4",
     "esbuild": "^0.25.0",
     "fs-extra": "^11.3.2",
     "glob": "^10.3.10",
