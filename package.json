@@ -1,6 +1,6 @@
 {
   "name": "@3sln/deck",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "Scalable, zero-config, Markdown-based component playgrounds and documentation sites. Runs on Vite, @web/dev-server, Rspack/webpack, or its own bundler-free dev server.",
   "type": "module",
   "author": "Ray Stubbs",
