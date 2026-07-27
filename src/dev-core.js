@@ -204,7 +204,7 @@ onDeckEvent(${json(MODULE_CHANGED)}, async ({path, version}) => {
  * imports. That is fine here: a demo renders into its own shadow root through
  * its own `reconcile`, and shares no component identity with deck's app.
  */
-export async function bundleModule(root, webPath) {
+export async function bundleModule(root, webPath, options = {}) {
   const esbuild = await import('esbuild');
   const entry = path.join(root, webPath.replace(/^\//, ''));
 
@@ -218,9 +218,58 @@ export async function bundleModule(root, webPath) {
     target: ['es2022'],
     sourcemap: 'inline',
     logOverride: {'unsupported-dynamic-import': 'silent'},
+    ...demoBuildOptions(options),
   });
 
   return result.outputFiles[0].text;
+}
+
+/**
+ * The parts of an esbuild config a deck may set for its demos.
+ *
+ * Under the Vite plugin a demo is resolved by the user's own Vite config, so
+ * an alias or a path mapping just works. Everywhere else deck bundles the demo
+ * itself and would otherwise have no idea what `@app/button` means. This is the
+ * seam: an `esbuild` block in the deck's config, passed through.
+ *
+ *     "@3sln/deck": {
+ *       "esbuild": {
+ *         "alias": {"@app": "./src"},
+ *         "define": {"__DEV__": "true"}
+ *       }
+ *     }
+ *
+ * Deliberately a fixed list rather than a spread of whatever is in the config:
+ * `write`, `format` and `entryPoints` are deck's to decide, and letting a config
+ * file overwrite them turns a typo into a dev server that serves nothing.
+ */
+const DEMO_BUILD_KEYS = [
+  'alias',
+  'define',
+  'external',
+  'inject',
+  'jsx',
+  'jsxDev',
+  'jsxFactory',
+  'jsxFragment',
+  'jsxImportSource',
+  'loader',
+  'mainFields',
+  'conditions',
+  'nodePaths',
+  'resolveExtensions',
+  'supported',
+  'target',
+  'tsconfig',
+  'tsconfigRaw',
+];
+
+export function demoBuildOptions(options = {}) {
+  const picked = {};
+  for (const key of DEMO_BUILD_KEYS) {
+    if (options[key] !== undefined) picked[key] = options[key];
+  }
+  return picked;
 }
 
 /**

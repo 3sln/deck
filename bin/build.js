@@ -27,6 +27,7 @@ import {
 import {extractCard} from '../src/card-text.js';
 import {scoreCard} from '../src/tokenize.js';
 import {encodeIndex, INDEX_FILE} from '../src/search-index.js';
+import {demoBuildOptions} from '../src/dev-core.js';
 
 const userRoot = process.cwd();
 const deckRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -63,8 +64,7 @@ function demoTagsIn(content) {
  * that is what `canonical-src` is for. Readers see the code that was written,
  * not the code that was bundled.
  */
-async function bundleDemos(content, {userRoot, outDir, bundled}) {
-  const esbuild = await import('esbuild');
+async function bundleDemos(content, {userRoot, outDir, bundled, esbuildOptions}) {
   let result = content;
 
   for (const match of demoTagsIn(content)) {
@@ -90,6 +90,7 @@ async function bundleDemos(content, {userRoot, outDir, bundled}) {
         target: ['es2022'],
         minify: true,
         logOverride: {'unsupported-dynamic-import': 'silent'},
+        ...demoBuildOptions(esbuildOptions),
       });
       bundled.set(src, outFile);
     }
@@ -222,7 +223,12 @@ async function build() {
     // browser gets a copy whose demo tags point at bundles.
     agentsIndex += `\n\n---\n\n# ${extractCard(file, raw).title} (${toWebPath(file)})\n\n${await inlineDemos(raw, outDir)}`;
 
-    const served = await bundleDemos(raw, {userRoot, outDir, bundled: bundledDemos});
+    const served = await bundleDemos(raw, {
+      userRoot,
+      outDir,
+      bundled: bundledDemos,
+      esbuildOptions: buildConfig.esbuild,
+    });
     if (served !== raw) await fs.writeFile(filePath, served);
 
     // Hashed and indexed from what is actually served, so the browser's copy

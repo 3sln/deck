@@ -85,7 +85,10 @@ export default function deckPlugin() {
           return {body: nativeEsmModule(virtual.target), type: 'js'};
         }
         if (virtual.kind === 'bundle') {
-          return {body: await bundleModule(deck.root, virtual.target), type: 'js'};
+          return {
+            body: await bundleModule(deck.root, virtual.target, deck.config.esbuild),
+            type: 'js',
+          };
         }
         let text = '';
         try {

@@ -105,6 +105,18 @@ export default {
 };
 ```
 
+Demos are bundled with esbuild on every path except Vite, which resolves them
+through your own Vite config instead. If your demos import through an alias or a
+path mapping, tell esbuild about it once:
+
+```json
+{
+  "@3sln/deck": {
+    "esbuild": {"alias": {"@app": "./src"}}
+  }
+}
+```
+
 ### Anything else
 
 The middleware behind the last two is plain connect/express, so express, connect,

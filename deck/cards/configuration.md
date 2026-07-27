@@ -24,6 +24,19 @@ Any of the following options can be placed at the root or within the `dev` and `
 
 -   `outDir` (string): The output directory for the built site, relative to the project root. This is primarily useful in the `build` block. Defaults to `out`.
 
+-   `esbuild` (object): Options passed to esbuild when it bundles your `<deck-demo>` modules — `alias`, `define`, `loader`, `tsconfig`, `jsxImportSource` and friends. Under the Vite plugin a demo is resolved by your own Vite config and this is not needed; every other dev server, and the build, bundle demos with esbuild and would otherwise not know what `@app/button` refers to.
+
+    ```json
+    {
+      "@3sln/deck": {
+        "esbuild": {
+          "alias": {"@app": "./src"},
+          "define": {"__DEV__": "true"}
+        }
+      }
+    }
+    ```
+
 -   `pick` (object): A map of source paths to destination paths, allowing you to copy files or directories into the build output. This is primarily useful in the `build` block to include assets or dependencies for your static site.
 
 ## Example

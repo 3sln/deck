@@ -98,7 +98,11 @@ export function createDeckMiddleware({root = process.cwd()} = {}) {
           return;
         }
         if (virtual.kind === 'bundle') {
-          send(res, await bundleModule(root, virtual.target), 'text/javascript; charset=utf-8');
+          send(
+            res,
+            await bundleModule(root, virtual.target, deck.config.esbuild),
+            'text/javascript; charset=utf-8',
+          );
           return;
         }
         let text = '';
