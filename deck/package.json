@@ -21,6 +21,8 @@
     "pinned": [
       "/cards/introduction.md",
       "/cards/getting-started.md"
-    ]
+    ],
+    "url": "https://deck.3sln.com",
+    "description": "Scalable, zero-config, Markdown-based component playgrounds and documentation sites."
   }
 }

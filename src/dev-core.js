@@ -498,6 +498,7 @@ export class DeckDev {
     const config = this.config;
     return getHtmlTemplate({
       title: config.title,
+      description: config.description,
       importMap: config.importMap,
       initialCardsData: await this.cardManifest(),
       pinnedCardPaths: config.pinned,

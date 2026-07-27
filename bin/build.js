@@ -28,6 +28,7 @@ import {extractCard} from '../src/card-text.js';
 import {scoreCard} from '../src/tokenize.js';
 import {encodeIndex, INDEX_FILE} from '../src/search-index.js';
 import {demoBuildOptions} from '../src/dev-core.js';
+import {robotsTxt, sitemapXml, llmsTxt} from '../src/discovery.js';
 
 const userRoot = process.cwd();
 const deckRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -265,6 +266,32 @@ ${marked.parse(agentsIndex)}
 </html>`,
   );
 
+  // A deck is a single-page application, so a crawler or an agent that does not
+  // run JavaScript sees an empty page. These say where the content really is.
+  console.log('Writing robots.txt and llms.txt...');
+  await fs.writeFile(
+    path.resolve(outDir, 'robots.txt'),
+    robotsTxt({title: buildConfig.title, url: buildConfig.url}),
+  );
+  await fs.writeFile(
+    path.resolve(outDir, 'llms.txt'),
+    llmsTxt({
+      title: buildConfig.title,
+      description: buildConfig.description,
+      url: buildConfig.url,
+      cards,
+    }),
+  );
+  if (buildConfig.url) {
+    await fs.writeFile(
+      path.resolve(outDir, 'sitemap.xml'),
+      sitemapXml({url: buildConfig.url, cards}),
+    );
+    console.log(`Sitemap written for ${buildConfig.url}.`);
+  } else {
+    console.log('No `url` in the deck config, so no sitemap; robots.txt names none.');
+  }
+
   // The precompiled index. The browser downloads this before any card, which is
   // what lets the very first search cover the whole deck instead of covering
   // whatever happened to have finished downloading.
@@ -289,6 +316,7 @@ ${marked.parse(agentsIndex)}
     path.resolve(outDir, 'index.html'),
     getHtmlTemplate({
       title: buildConfig.title,
+      description: buildConfig.description,
       importMap: buildConfig.importMap,
       initialCardsData: cards.map(({path: cardPath, hash}) => ({path: cardPath, hash})),
       pinnedCardPaths: buildConfig.pinned,

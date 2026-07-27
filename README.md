@@ -140,8 +140,9 @@ Writes a static site to `out/`, ready for any file host. The build:
 - precompiles a **search index** over the whole deck, which the browser downloads
   before any card — so the first search covers everything, not just what has
   finished loading;
-- writes `agents.md` and `agents.html`, the whole deck as one document with demo
-  sources inlined, for LLM agents that cannot run a single-page app;
+- writes `llms.txt`, `agents.md`, `agents.html`, `robots.txt` and — when `url`
+  is configured — `sitemap.xml`, so a crawler or an agent that cannot run a
+  single-page app can still read the whole deck;
 - emits a service worker and asset manifest for offline reading.
 
 ### Loading order
