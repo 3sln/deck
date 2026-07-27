@@ -24,6 +24,10 @@ Any of the following options can be placed at the root or within the `dev` and `
 
 -   `outDir` (string): The output directory for the built site, relative to the project root. This is primarily useful in the `build` block. Defaults to `out`.
 
+-   `url` (string): Where this deck is published, e.g. `https://deck.3sln.com`. A sitemap needs absolute URLs and only you know them, so setting this is what produces `sitemap.xml`; `robots.txt` and `llms.txt` are written either way, with relative links when it is unset.
+
+-   `description` (string): One sentence about the deck. Used for the page's `<meta name="description">` and as the summary line in `llms.txt`.
+
 -   `esbuild` (object): Options passed to esbuild when it bundles your `<deck-demo>` modules — `alias`, `define`, `loader`, `tsconfig`, `jsxImportSource` and friends. Under the Vite plugin a demo is resolved by your own Vite config and this is not needed; every other dev server, and the build, bundle demos with esbuild and would otherwise not know what `@app/button` refers to.
 
     ```json
@@ -74,3 +78,14 @@ Here is an example demonstrating the override system.
 
 -   **`npm run dev`**: The title will be `My Awesome Project (DEV)` and `my-lib` will resolve to `/node_modules/my-lib/index.js`.
 -   **`npm run build`**: The title will be `My Awesome Project`, the output will go to `dist/docs`, and the `importMap` will be overridden to point `my-lib` to the locally copied version at `/lib/my-lib/index.js`.
+
+## Files for Crawlers and Agents
+
+A deck is a single-page application: every card lives behind a `?c=` query parameter and its body arrives by fetch. Anything that does not run JavaScript sees one nearly empty page. So `deck-build` also writes the content down where it can be read directly:
+
+-   **`/llms.txt`** — the [llmstxt.org](https://llmstxt.org) convention. The deck's title, its description, and one line per card linking that card's Markdown file. This is the best starting point for an agent.
+-   **`/agents.md`** and **`/agents.html`** — every card concatenated into one document, with the source of each live demo inlined where its `<deck-demo>` tag was.
+-   **`/robots.txt`** — allows everything, and names the sitemap when `url` is set.
+-   **`/sitemap.xml`** — the root plus the `?c=` URL that opens each card. Written only when `url` is set.
+
+The generated `index.html` also carries `<link rel="alternate">` tags pointing at `/agents.md` and `/llms.txt`, so an agent that starts at the page still finds them.

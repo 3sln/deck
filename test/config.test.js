@@ -4,7 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import {loadDeckConfig, getCardFiles, getProjectFiles, getHtmlTemplate} from '../src/config.js';
 import {extractCard} from '../src/card-text.js';
-import {parseVirtualUrl, ESM_PREFIX, SRC_PREFIX, BUNDLE_PREFIX} from '../src/dev-core.js';
+import {
+  parseVirtualUrl,
+  ESM_PREFIX,
+  SRC_PREFIX,
+  SRC_SUFFIX,
+  BUNDLE_PREFIX,
+} from '../src/dev-core.js';
 
 let root;
 
@@ -112,18 +118,28 @@ test('the dev flag and index URL reach the client', () => {
 });
 
 test('the generated dev module URLs round-trip a card path', () => {
-  const target = '/demos/my demo.cljs';
+  const target = '/demos/my demo.js';
   const encoded = encodeURIComponent(target);
 
   expect(parseVirtualUrl(`${ESM_PREFIX}${encoded}`)).toEqual({kind: 'esm', target});
-  expect(parseVirtualUrl(`${SRC_PREFIX}${encoded}`)).toEqual({kind: 'src', target});
+  expect(parseVirtualUrl(`${SRC_PREFIX}${encoded}${SRC_SUFFIX}`)).toEqual({kind: 'src', target});
   expect(parseVirtualUrl(`${BUNDLE_PREFIX}${encoded}?v=3`)).toEqual({kind: 'bundle', target});
   expect(parseVirtualUrl('/cards/one.md')).toBeNull();
 });
 
-test('a .js demo path keeps its extension through the round trip', () => {
-  // It used to lose it, which left the source panel asking the dev server for a
-  // file that was not there.
-  const target = '/demos/counter-demo.js';
-  expect(parseVirtualUrl(`${SRC_PREFIX}${encodeURIComponent(target)}`).target).toBe(target);
+test('a source URL round-trips whatever extension the file has', () => {
+  // Every deck demo deck ships is a .js file, which is how a `canonical-src`
+  // pointing at ClojureScript went unnoticed: the request has to end in `.js`
+  // or Vite routes it to static file serving and answers 404, but the path
+  // inside it must survive intact.
+  for (const target of [
+    '/demos/counter-demo.js',
+    '/demos/custom-dodo/custom-dodo.cljs',
+    '/demos/a.ts',
+    '/demos/no-extension',
+    '/demos/dots.in.name.mjs',
+  ]) {
+    const url = `${SRC_PREFIX}${encodeURIComponent(target)}${SRC_SUFFIX}`;
+    expect(parseVirtualUrl(url)).toEqual({kind: 'src', target});
+  }
 });

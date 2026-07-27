@@ -112,6 +112,7 @@ const attrs = spec =>
 
 export function getHtmlTemplate({
   title,
+  description,
   importMap,
   initialCardsData,
   pinnedCardPaths,
@@ -147,7 +148,19 @@ export function getHtmlTemplate({
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
     <title>${escapeHtml(title ?? 'Deck')}</title>
+    ${description ? `<meta name="description" content="${escapeHtml(description)}">` : ''}
     ${favicon ? `<link rel="icon" href="${escapeHtml(favicon)}">` : ''}
+    ${
+      dev
+        ? ''
+        : `<meta name="robots" content="index, follow">
+    <!--
+      This page is an application; the deck's content is these files. An agent
+      that cannot run it should read one of them instead of this.
+    -->
+    <link rel="alternate" type="text/markdown" href="/agents.md" title="The whole deck as one Markdown document">
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="An index of every card">`
+    }
     ${styleTags}
     ${importMap ? `<script type="importmap">${escapeJson(importMap)}</script>` : ''}
     ${headExtra}
@@ -181,7 +194,10 @@ export function getHtmlTemplate({
   <body>
     <div id="root"></div>
     <div style="display: none;" aria-hidden="true">
-      This is a Single Page Application. Agents should look at the <a href="agents.md">agents.md</a> or <a href="agents.html">agents.html</a> files for documentation they can read easily.
+      This is a Single Page Application. Agents should read
+      <a href="/llms.txt">/llms.txt</a> for an index of every card, or
+      <a href="/agents.md">/agents.md</a> (<a href="/agents.html">/agents.html</a>)
+      for the whole deck as one document.
     </div>
     <script type="module">
       import { renderDeck } from '${entryFile}';

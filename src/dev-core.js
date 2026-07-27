@@ -43,6 +43,21 @@ export const BUNDLE_PREFIX = '/@deck-dev/bundle/';
 export const ESM_PREFIX = '/@deck-dev-esm/';
 export const SRC_PREFIX = '/@deck-dev-src/';
 
+/**
+ * Appended to every source-module request, and stripped again on the way in.
+ *
+ * A dev server decides how to handle a request partly by its extension, and a
+ * demo's source file is not always JavaScript: `canonical-src` exists precisely
+ * so a demo compiled from ClojureScript can show the `.cljs` it was written in.
+ * Vite routes `/@deck-dev-src/…custom-dodo.cljs` to static file serving rather
+ * than through its plugin container, and answers 404 — the module deck is
+ * generating never gets a chance to exist.
+ *
+ * Ending every such URL in `.js` makes the request look like what it is: a
+ * JavaScript module, whatever the file it wraps happens to be.
+ */
+export const SRC_SUFFIX = '.js';
+
 export const CARD_CHANGED = 'deck:card-changed';
 export const CARD_REMOVED = 'deck:card-removed';
 export const MODULE_CHANGED = 'deck:module-changed';
@@ -56,7 +71,10 @@ export function parseVirtualUrl(url) {
     return {kind: 'esm', target: decodeURIComponent(pathname.slice(ESM_PREFIX.length))};
   }
   if (pathname.startsWith(SRC_PREFIX)) {
-    return {kind: 'src', target: decodeURIComponent(pathname.slice(SRC_PREFIX.length))};
+    // The `.js` the request carries is deck's, not the file's, and comes off
+    // again here. See SRC_SUFFIX for why it is there at all.
+    const encoded = pathname.slice(SRC_PREFIX.length).replace(/\.js$/, '');
+    return {kind: 'src', target: decodeURIComponent(encoded)};
   }
   if (pathname.startsWith(BUNDLE_PREFIX)) {
     return {kind: 'bundle', target: decodeURIComponent(pathname.slice(BUNDLE_PREFIX.length))};
@@ -480,6 +498,7 @@ export class DeckDev {
     const config = this.config;
     return getHtmlTemplate({
       title: config.title,
+      description: config.description,
       importMap: config.importMap,
       initialCardsData: await this.cardManifest(),
       pinnedCardPaths: config.pinned,
