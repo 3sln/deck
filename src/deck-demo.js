@@ -674,6 +674,15 @@ const actionLoggerInterceptor = {
 };
 
 const demoStyle = css`
+  /*
+   * Height is intrinsic — the tallest panel, capped — and a card author who
+   * wants something else says so on the element:
+   *
+   *     <deck-demo id="x" src="/demos/x.js" style="height: 20rem"></deck-demo>
+   *
+   * A rule in the host document beats a :host rule, so that wins with no
+   * cooperation needed here.
+   */
   :host {
     display: flex;
     border: 1px solid var(--border-color);
@@ -725,30 +734,46 @@ const demoStyle = css`
     background: var(--card-hover-bg);
     opacity: 1;
   }
+  /*
+   * Every panel occupies the same grid cell, so the wrapper is as tall as the
+   * tallest of them and switching tabs does not change the demo's height. That
+   * is what stops the card below a demo from jumping when a reader opens the
+   * Source tab.
+   *
+   * Two things this is deliberately not:
+   *
+   * A zero width for the inactive ones reaches for the same goal and misses. A
+   * zero-width panel is still laid out, so its content wraps into a column one
+   * character wide and its height becomes enormous — a two-line panel measured
+   * 551px next to the 303px one beside it, which is the jump it was there to
+   * prevent, and a Source panel of any length simply pinned the demo at its
+   * max-height forever.
+   *
+   * Hiding with display none measures the active panel correctly but takes the
+   * hidden ones out of layout entirely, so the height follows whichever tab is
+   * open — 147px on Counter, 800px on Source.
+   *
+   * Hiding with visibility keeps a panel laid out at its real width, which is
+   * what makes the max meaningful, and keeps its state, its timers and its
+   * iframes exactly as a zero width did.
+   */
   .content-wrapper {
-    display: flex;
+    display: grid;
     flex-grow: 1;
     overflow: hidden;
     padding: 1rem;
   }
-  /*
-   * Inactive panels are display:none, not width:0.
-   *
-   * A zero-width panel is still laid out, and its content wraps into a column
-   * one character wide — so a Source panel holding a hundred lines of code
-   * became thousands of pixels tall, and the demo, being a flex row, took the
-   * tallest panel's height. A one-line counter demo rendered 800px tall
-   * (its max-height, which is what stopped it being worse) with the content
-   * pinned to the top. display:none keeps the element and its state and skips
-   * the layout, which is the whole of what was wanted.
-   */
   .panel-content {
-    display: none;
+    grid-area: 1 / 1;
+    visibility: hidden;
+    pointer-events: none;
+    overflow: hidden;
+    min-width: 0;
   }
   .panel-content.active {
-    display: block;
+    visibility: visible;
+    pointer-events: auto;
     overflow: auto;
-    width: 100%;
   }
   pre > code {
     padding: 1em;
