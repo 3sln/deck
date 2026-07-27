@@ -1,7 +1,7 @@
 {
   "name": "@3sln/deck",
   "version": "0.0.14",
-  "description": "A Vite plugin for building scalable, zero-config, Markdown-based component playgrounds and documentation sites.",
+  "description": "Scalable, zero-config, Markdown-based component playgrounds and documentation sites. Runs on Vite, @web/dev-server, Rspack/webpack, or its own bundler-free dev server.",
   "type": "module",
   "author": "Ray Stubbs",
   "repository": {
@@ -9,11 +9,15 @@
     "url": "https://github.com/3sln/deck.git"
   },
   "scripts": {
-    "format": "prettier -w \"**/*.js\""
+    "format": "prettier -w \"**/*.js\"",
+    "test": "bun test"
   },
   "license": "MIT",
   "keywords": [
     "vite",
+    "web-dev-server",
+    "webpack",
+    "rspack",
     "plugin",
     "documentation",
     "markdown",
@@ -22,30 +26,47 @@
   ],
   "exports": {
     ".": "./src/main.js",
-    "./vite-plugin": "./vite-plugin.js"
+    "./vite-plugin": "./vite-plugin.js",
+    "./wds-plugin": "./wds-plugin.js",
+    "./webpack-plugin": "./webpack-plugin.js",
+    "./dev-core": "./src/dev-core.js",
+    "./package.json": "./package.json"
   },
   "bin": {
-    "deck-build": "./bin/build.js"
+    "deck-build": "./bin/build.js",
+    "deck-dev": "./bin/dev.js"
   },
   "files": [
     "bin/",
     "src/",
-    "vite-plugin.js"
+    "vite-plugin.js",
+    "wds-plugin.js",
+    "webpack-plugin.js"
   ],
   "publishConfig": {
     "access": "public"
   },
   "dependencies": {
-    "@3sln/bones": "^0.0.4",
-    "@3sln/dodo": "^0.0.7",
-    "@3sln/ngin": "^0.0.1",
+    "@3sln/dodo": "github:3sln/dodo#main",
+    "@3sln/ngin": "github:3sln/ngin#main",
+    "esbuild": "^0.25.0",
     "fs-extra": "^11.3.2",
     "glob": "^10.3.10",
     "highlight.js": "^11.9.0",
-    "marked": "^16.3.0",
-    "vite": "^5.1.0"
+    "marked": "^16.3.0"
+  },
+  "peerDependencies": {
+    "vite": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "prettier": "^3.6.2"
+    "@web/dev-server": "^0.4.6",
+    "happy-dom": "^18.0.1",
+    "prettier": "^3.6.2",
+    "vite": "^5.4.20"
   }
 }

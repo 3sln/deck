@@ -1,115 +1,62 @@
-import fs from 'fs-extra';
-import path from 'path';
-import { sha256, loadDeckConfig, getProjectFiles, getCardFiles, getHtmlTemplate } from './src/config.js';
+/**
+ * Deck as a Vite plugin.
+ *
+ * Everything about *a deck* — what is in it, what the index page says, what the
+ * generated demo modules do — lives in `src/dev-core.js`. What is here is the
+ * Vite-shaped half: its virtual module hooks, its watcher, and its HMR
+ * channel, which deck uses in preference to its own because a runtime that
+ * already has one should not be made to run two.
+ */
+
+import path from 'node:path';
+import {
+  DeckDev,
+  ESM_PREFIX,
+  SRC_PREFIX,
+  CARD_CHANGED,
+  CARD_REMOVED,
+  SOURCE_CHANGED,
+  MODULE_EXTENSIONS,
+  parseVirtualUrl,
+  viteEsmModule,
+  viteSrcModule,
+} from './src/dev-core.js';
 
 export default function deckPlugin() {
   let resolvedConfig;
+  let deck;
 
   return {
     name: 'vite-plugin-deck',
 
     resolveId(id) {
-      if (id.startsWith('/@deck-dev-esm/') || id.startsWith('/@deck-dev-src/')) {
+      if (id.startsWith(ESM_PREFIX) || id.startsWith(SRC_PREFIX)) {
         return id;
       }
       return null;
     },
 
-    async handleHotUpdate({read, modules, server}) {
-      const rawUrls = modules.map(m => m.url).filter(u => u.endsWith('?raw'));
-      if (rawUrls.length === 0) {
-        return;
-      }
+    load(id) {
+      const virtual = parseVirtualUrl(id);
+      if (!virtual) return null;
+      if (virtual.kind === 'esm') return viteEsmModule(virtual.target);
+      return viteSrcModule(virtual.target);
+    },
+
+    async handleHotUpdate({file, read, server}) {
+      // A demo's Source panel shows the file's text, which changes for reasons
+      // Vite's module graph knows nothing about — so the notification is keyed
+      // on the path on disk rather than on whatever URL the module ended up
+      // with. Only modules are read: a card changing is the watcher's business.
+      if (!deck || !MODULE_EXTENSIONS.has(path.extname(file))) return;
+      const webPath = deck.webPathFor(file);
+      if (!webPath) return;
 
       server.ws.send({
         type: 'custom',
-        event: 'deck-raw-update',
-        data: {urls: rawUrls, text: await read()},
+        event: SOURCE_CHANGED,
+        data: {path: webPath, text: await read()},
       });
-    },
-
-    load(id) {
-      if (id.startsWith('/@deck-dev-esm/')) {
-        const realPath = decodeURIComponent(id.slice('/@deck-dev-esm/'.length));
-        return `
-          import realDefault from '${realPath}';
-
-          let lastArgs;
-          let abortController = new AbortController();
-
-          if (import.meta.hot?.data.lastArgs) {
-            lastArgs = import.meta.hot.data.lastArgs;
-          }
-
-          export default (...args) => {
-            lastArgs = args;
-            const thisContext = { signal: abortController.signal };
-            realDefault.call(thisContext, ...args);
-          };
-
-          if (import.meta.hot) {
-            import.meta.hot.dispose(data => {
-              data.lastArgs = lastArgs;
-              abortController.abort();
-            });
-
-            import.meta.hot.accept(newModule => {
-              if (newModule && newModule.default && lastArgs) {
-                newModule.default(...lastArgs);
-              }
-            });
-          }
-        `;
-      } 
-      
-      if (id.startsWith('/@deck-dev-src/')) {
-        let realPath = decodeURIComponent(id.slice('/@deck-dev-src/'.length));
-        if (realPath.endsWith('.js')) {
-          realPath = realPath.slice(0, -3);
-        }
-        const rawPath = realPath + '?raw';
-        return `
-          import moduleText from '${rawPath}';
-
-          const textObservers = import.meta.hot?.data.textObservers ?? [];
-          export const moduleText$ = {
-            subscribe: observer => {
-              const observerObj = typeof observer === 'function' ? {next: observer} : observer;
-              observerObj?.next(moduleText);
-              textObservers.push(observerObj);
-
-              return {
-                unsubscribe: () => {
-                  textObservers = textObservers.filter(x => x !== observerObj);
-                }
-              };
-            }
-          };
-
-          if (import.meta.hot) {
-            import.meta.hot.accept();
-            import.meta.hot.dispose(data => {
-              data.textObservers = textObservers;
-            });
-
-            import.meta.hot.on('deck-raw-update', ({urls, text}) => {
-              if (!urls.includes('${rawPath}')) {
-                return;
-              }
-
-              for (const observer of textObservers) {
-                observer?.next(text);
-              }
-            });
-          }
-        `;
-      }
-
-      return null;
-    },
-
-    config(config, {command}) {
-      return {optimizeDeps: {include: config.optimizeDeps?.include ?? []}};
     },
 
     configResolved(config) {
@@ -117,50 +64,39 @@ export default function deckPlugin() {
     },
 
     async configureServer(server) {
-      const config = await loadDeckConfig(resolvedConfig.root);
-      const devConfig = config.dev;
+      deck = await new DeckDev({root: resolvedConfig.root}).init();
 
       server.watcher.on('all', (eventName, eventPath) => {
-        const projPath = path.relative(resolvedConfig.root, eventPath);
-        const webPath = '/' + projPath.replace(/\\/g, '/');
-        const files = getCardFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
-        if (!files.includes(webPath)) return;
+        const webPath = deck.webPathFor(path.resolve(eventPath));
+        if (!webPath || !deck.isCard(webPath)) return;
 
         switch (eventName) {
           case 'add':
           case 'change':
-            server.ws.send({type: 'custom', event: 'deck:card-changed', data: {path: webPath}});
+            server.ws.send({type: 'custom', event: CARD_CHANGED, data: {path: webPath}});
             break;
           case 'unlink':
-            server.ws.send({type: 'custom', event: 'deck:card-removed', data: {path: webPath}});
+            server.ws.send({type: 'custom', event: CARD_REMOVED, data: {path: webPath}});
             break;
         }
       });
 
       server.middlewares.use(async (req, res, next) => {
-        if (new URL(req.url, "https://localhost").pathname === '/') {
-          const cardPaths = getCardFiles(resolvedConfig.root, devConfig).map(p => `/${p}`);
-          const initialCardsData = await Promise.all(cardPaths.map(async (p) => {
-            const content = await fs.readFile(path.join(resolvedConfig.root, p), 'utf-8');
-            const hash = await sha256(content);
-            return { path: p, hash };
-          }));
-
-          const template = getHtmlTemplate({
-            title: devConfig.title,
-            importMap: devConfig.importMap,
-            initialCardsData,
-            pinnedCardPaths: devConfig.pinned,
-            entryFile: '@3sln/deck',
-            favicon: devConfig.favicon,
-            scripts: devConfig.scripts,
-            stylesheets: devConfig.stylesheets,
-          });
-          const html = await server.transformIndexHtml(req.url, template);
-          res.end(html);
+        if (new URL(req.url, 'http://localhost').pathname !== '/') {
+          next();
           return;
         }
-        next();
+        try {
+          // `@3sln/deck` rather than a resolved path: Vite resolves the bare
+          // specifier itself, which is also what puts the app through its
+          // dependency optimiser.
+          const template = await deck.indexHtml({entryFile: '@3sln/deck'});
+          const html = await server.transformIndexHtml(req.url, template);
+          res.setHeader('Content-Type', 'text/html');
+          res.end(html);
+        } catch (err) {
+          next(err);
+        }
       });
     },
   };

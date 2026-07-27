@@ -7,7 +7,7 @@ Deck is configured through a `@3sln/deck` field in your project's `package.json`
 Deck uses a simple override system for configuration. You can define a base configuration at the root of the `@3sln/deck` object. Then, you can create `dev` and `build` sub-objects to override any of those settings for a specific environment.
 
 -   **Root Configuration**: The base settings used by both environments.
--   **`dev` Block**: Overrides for the development server (`vite`).
+-   **`dev` Block**: Overrides for the development server (`deck-dev`, or whichever dev server plugin you use).
 -   **`build` Block**: Overrides for the production build (`deck-build`).
 
 When Deck loads, it merges the root configuration with the environment-specific block. For example, when running the `deck-build` command, Deck will merge the root `{...}` options with the `build: {...}` options.
