@@ -688,8 +688,18 @@ const demoStyle = css`
     border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 1em;
-    max-height: 50rem;
     background-color: var(--card-bg);
+    /*
+     * The cap is viewport-relative as well as absolute, because on a phone
+     * only one pane shows at a time: the demo is sized by whichever panel is
+     * tallest, usually Source, while the reader is looking at a three-line
+     * component. A flat 50rem is 800px, which on an 844px screen is the whole
+     * of it. The dvh line is an override rather than the only rule, so a
+     * browser that does not understand it keeps a working cap instead of
+     * dropping the declaration and letting a demo grow without limit.
+     */
+    max-height: min(50rem, 65vh);
+    max-height: min(50rem, 65dvh);
   }
   .pane {
     display: flex;
