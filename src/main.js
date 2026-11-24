@@ -44,7 +44,6 @@ const iconPaths = {
   close: 'm6 6 12 12M18 6 6 18',
   copy: 'M9 9h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V9Zm6 0V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4',
   back: 'M19 12H5m7-7-7 7 7 7',
-  bookmark: 'M6 5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16l-6-4-6 4Z',
   download: 'M12 3v12m-4-4 4 4 4-4M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3',
 };
 
@@ -70,6 +69,19 @@ function icon(name) {
 function labelIcon(button, label) {
   button.title = label;
   button.setAttribute('aria-label', label);
+}
+
+function labelOffline(button, saved, project, keep = false) {
+  const label = saved
+    ? 'Saved for offline use'
+    : keep
+      ? 'Keep card offline'
+      : 'Download for offline use';
+  const subject = project ? ` (${project})` : '';
+  button.replaceChildren(element('span', '', label), icon(saved ? 'close' : 'download'));
+  button.toggleAttribute('data-saved', saved);
+  button.title = saved ? `Remove offline copy${subject}` : '';
+  button.setAttribute('aria-label', `${label}${subject}${saved ? '. Remove offline copy' : ''}`);
 }
 
 function status() {
@@ -288,8 +300,6 @@ export async function renderDeck({
     },
     'deck-detail-download',
   );
-  save.append(icon('bookmark'));
-  labelIcon(save, 'Save card offline');
   save.hidden = true;
   detailTools.append(close, save);
   const detailContext = element('p', 'deck-detail-context');
@@ -526,11 +536,7 @@ export async function renderDeck({
       const state = offline.get(key);
       button.disabled = !state || pending.has(key);
       if (!state) continue;
-      labelIcon(
-        button,
-        state.projectSaved ? `Remove offline copy of ${deck.title}` : `Save ${deck.title} offline`,
-      );
-      button.setAttribute('aria-pressed', String(state.projectSaved));
+      labelOffline(button, state.projectSaved, deck.title);
     }
 
     const deck = deckFor(selected);
@@ -540,15 +546,7 @@ export async function renderDeck({
     if (state) {
       const cardSaved = state.cardPaths.includes(selected.path);
       save.disabled = pending.has(key);
-      labelIcon(
-        save,
-        cardSaved
-          ? 'Remove card download'
-          : state.projectSaved
-            ? 'Keep card offline'
-            : 'Save card offline',
-      );
-      save.setAttribute('aria-pressed', String(cardSaved));
+      labelOffline(save, cardSaved, undefined, state.projectSaved);
     }
   }
 
@@ -584,9 +582,7 @@ export async function renderDeck({
     updateOfflineControls();
     try {
       await operation();
-      if (isCurrent()) {
-        message.textContent = remove ? 'Offline copy removed.' : 'Saved for offline use.';
-      }
+      if (isCurrent()) message.textContent = remove ? 'Offline copy removed.' : '';
     } catch {
       if (isCurrent()) {
         message.textContent = 'The download could not be changed. Try again.';
@@ -757,7 +753,6 @@ export async function renderDeck({
       const row = element('div', 'deck-project-row');
       const controls = projectChip(deck, showProjects, true);
       if (controls.chip.childElementCount) row.append(controls.chip);
-      else row.append(element('span', 'deck-offline-label', 'Offline access'));
 
       let button;
       if (deck.offlineAvailable) {
@@ -773,8 +768,7 @@ export async function renderDeck({
           },
           'deck-project-download',
         );
-        button.append(icon('download'));
-        labelIcon(button, `Save ${deck.title} offline`);
+        labelOffline(button, false, deck.title);
         row.append(button);
       }
 
@@ -1052,6 +1046,7 @@ export async function renderDeck({
     if (card && options.open && getComputedStyle(sidebar).display === 'none') options.open = false;
     detail.hidden = !card;
     content.replaceChildren();
+    detail.scrollTop = 0;
     detailOfflineStatus.textContent = '';
     detailStatus.textContent = '';
     retryCard.hidden = true;

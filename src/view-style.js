@@ -238,7 +238,7 @@ export const viewerStyles = `
 }
 
 .deck-viewer .deck-search-options[open] > .deck-filter-trigger,
-.deck-viewer :is(.deck-project-download, .deck-detail-download)[aria-pressed='true'] {
+.deck-viewer :is(.deck-project-download, .deck-detail-download)[data-saved] {
   background: var(--deck-accent-soft);
   border-color: color-mix(in srgb, var(--deck-accent) 28%, var(--deck-border));
   color: var(--deck-accent);
@@ -357,14 +357,10 @@ export const viewerStyles = `
 .deck-viewer .deck-project-row {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   font-size: 0.875rem;
   gap: 0.35rem;
   min-width: 0;
-}
-
-.deck-viewer .deck-project-row > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .deck-viewer .deck-project-chip {
@@ -475,10 +471,16 @@ export const viewerStyles = `
   z-index: 1;
 }
 
-.deck-viewer .deck-project-download {
-  block-size: 2.25rem;
-  flex: none;
-  inline-size: 2.25rem;
+.deck-viewer :is(.deck-project-download, .deck-detail-download) {
+  block-size: auto;
+  border-color: var(--deck-border);
+  font: inherit;
+  font-size: 0.78rem;
+  gap: 0.35rem;
+  inline-size: auto;
+  min-block-size: 2.25rem;
+  padding: 0.25rem 0.55rem;
+  text-align: start;
 }
 
 .deck-viewer .deck-version-menu[popover] {
@@ -916,10 +918,19 @@ export const viewerStyles = `
 
 @container (width > 49rem) {
   .deck-viewer .deck-workspace.has-selection {
-    align-items: start;
+    block-size: 100dvh;
     gap: clamp(1.25rem, 3cqi, 2.75rem);
     grid-template-columns: minmax(16rem, 1fr) minmax(0, 2.15fr);
+    grid-template-rows: minmax(0, 1fr);
+    padding-block-end: 0;
     padding-block-start: clamp(1.75rem, 4cqi, 3.25rem);
+  }
+
+  .deck-viewer .has-selection > :is(.deck-sidebar, .deck-detail) {
+    min-block-size: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding-block-end: 3.5rem;
   }
 
   .deck-viewer .has-selection .deck-detail {
