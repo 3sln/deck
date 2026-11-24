@@ -1,6 +1,12 @@
 name: Release Deck
 
 on:
+  workflow_dispatch:
+    inputs:
+      use_npm_token:
+        description: Use NPM_TOKEN instead of npm trusted publishing
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: [package.json]
@@ -14,6 +20,7 @@ permissions:
 
 jobs:
   version:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
@@ -27,16 +34,24 @@ jobs:
         id: bump
         env:
           BEFORE: ${{ github.event.before }}
+          TRIGGER: ${{ github.event_name }}
         run: |
-          if [[ "$BEFORE" == 0000000000000000000000000000000000000000 ]]; then
+          if [[ "$TRIGGER" == workflow_dispatch ]]; then
+            bun -e '
+              const {version} = await Bun.file("package.json").json();
+              if (!/^[0-9A-Za-z.+-]+$/.test(version)) throw new Error("Invalid package version");
+              console.log(`version=${version}`);
+            ' >> "$GITHUB_OUTPUT"
+          elif [[ "$BEFORE" == 0000000000000000000000000000000000000000 ]]; then
             exit 0
+          else
+            git show "$BEFORE:package.json" | bun -e '
+              const previous = JSON.parse(await Bun.stdin.text()).version;
+              const {version} = await Bun.file("package.json").json();
+              if (!/^[0-9A-Za-z.+-]+$/.test(version)) throw new Error("Invalid package version");
+              if (Bun.semver.order(version, previous) > 0) console.log(`version=${version}`);
+            ' >> "$GITHUB_OUTPUT"
           fi
-          git show "$BEFORE:package.json" | bun -e '
-            const previous = JSON.parse(await Bun.stdin.text()).version;
-            const {version} = await Bun.file("package.json").json();
-            if (!/^[0-9A-Za-z.+-]+$/.test(version)) throw new Error("Invalid package version");
-            if (Bun.semver.order(version, previous) > 0) console.log(`version=${version}`);
-          ' >> "$GITHUB_OUTPUT"
         shell: bash
 
   release:
@@ -56,7 +71,6 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - uses: oven-sh/setup-bun@v2
       - name: Verify the release tag
@@ -72,8 +86,12 @@ jobs:
         run: bun test
       - name: Publish to npm
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ (github.event_name == 'push' || inputs.use_npm_token) && secrets.NPM_TOKEN || '' }}
         run: |
+          if [[ -n "$NODE_AUTH_TOKEN" ]]; then
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/deck-publish.npmrc"
+            printf '%s\n' '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+          fi
           pack_json="$RUNNER_TEMP/deck-pack.json"
           npm pack --json --pack-destination "$RUNNER_TEMP" > "$pack_json"
           package=$(node -p 'require("./package.json").name')

@@ -161,6 +161,9 @@ The workflow can use the `NPM_TOKEN` repository secret or npm trusted publishing
 For trusted publishing, authorize `publish.yml` in the `@3sln/deck` npm package
 settings and enable direct `npm publish`. [npm trusted publishing setup](https://docs.npmjs.com/trusted-publishers/)
 
+Run the Release Deck workflow manually on `main` to retry its current version.
+Manual runs use trusted publishing unless you select the `NPM_TOKEN` option.
+
 ## License
 
 MIT
