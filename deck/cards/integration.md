@@ -75,6 +75,8 @@ For one deck, supply `manifestUrl` directly. To use an existing composition, sup
 
 Use project chips to toggle which projects are included in results. The caret beside a project's current version opens its version chooser. The filter control opens an anchored panel on desktop and a bottom sheet on phones. Both provide tags, project and version controls, and offline downloads.
 
+Text search loads each selected project's index on demand. A slow request shows a loading message. If every selected project's index fails, the UI pauses text search and offers a retry while readers browse cards or filter by tag. If only some indexes fail, the UI names the affected projects and shows results from the others.
+
 Only compose decks you trust. The stock UI renders authored HTML and can execute demo modules referenced by cards.
 
 ## Serve the cards over MCP

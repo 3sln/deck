@@ -395,8 +395,9 @@ export function composeDecks(decks) {
       return normalizeTags([...configured, ...procedural]).slice(0, limit);
     },
     async search({limit = 100, onError, ...options} = {}) {
+      const searchable = active().filter(deck => deck.cards.length);
       const results = await Promise.all(
-        active().map(async deck => {
+        searchable.map(async deck => {
           const version = deck.version;
           const isCurrent = () => enabled.has(deck.id) && version === deck.version;
           try {

@@ -138,11 +138,51 @@ export const viewerStyles = `
   min-width: 0;
   outline: none;
   padding: 0;
+  text-overflow: ellipsis;
   width: 100%;
 }
 
 .deck-viewer .deck-search::placeholder {
   color: var(--deck-muted);
+}
+
+.deck-viewer .deck-search:disabled {
+  color: var(--deck-muted);
+  cursor: not-allowed;
+}
+
+.deck-viewer .deck-search-feedback {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.8rem;
+}
+
+.deck-viewer .deck-search-feedback > .deck-action[aria-disabled='true'] {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.deck-viewer .deck-search-feedback[data-loading] .deck-status::before {
+  border: 1.5px solid var(--deck-border);
+  border-top-color: var(--deck-accent);
+  border-radius: 50%;
+  content: '';
+  display: inline-block;
+  block-size: 0.7rem;
+  inline-size: 0.7rem;
+  margin-inline-end: 0.5rem;
+  vertical-align: -0.05rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .deck-viewer .deck-search-feedback[data-loading] .deck-status::before {
+    animation: deck-search-spin 0.8s linear infinite;
+  }
+}
+
+@keyframes deck-search-spin {
+  to { transform: rotate(1turn); }
 }
 
 .deck-viewer .deck-search-options {
@@ -515,16 +555,15 @@ export const viewerStyles = `
   margin-block-start: 0.7rem;
 }
 
-.deck-viewer .deck-mcp-endpoint {
+.deck-viewer .deck-mcp-endpoint:not([hidden]) {
   align-items: center;
   color: var(--deck-muted);
   display: flex;
+  flex-direction: column;
   font-size: 0.75rem;
-  gap: 0.4rem;
-  inset-block-start: 0.45rem;
-  inset-inline-end: clamp(1rem, 4cqi, 2.75rem);
-  max-inline-size: min(30rem, calc(100% - 2rem));
-  position: absolute;
+  margin-block-start: 0.7rem;
+  margin-inline: auto;
+  max-inline-size: 30rem;
 }
 
 .deck-viewer .deck-mcp-label {
@@ -543,23 +582,22 @@ export const viewerStyles = `
 
 .deck-viewer .deck-mcp-copy-status {
   color: var(--deck-accent);
-  flex: 0 0 4.25em;
-  text-align: end;
+  text-align: center;
   white-space: nowrap;
 }
 
 .deck-viewer .deck-mcp-copy {
   align-items: center;
   background: transparent;
-  border: 1px solid var(--deck-border);
+  border: 0;
   border-radius: 0.35rem;
   color: inherit;
   cursor: pointer;
   display: inline-flex;
-  flex: 0 1 auto;
   font: inherit;
   gap: 0.25rem;
-  min-block-size: 1.6rem;
+  max-inline-size: 100%;
+  min-block-size: 2rem;
   min-inline-size: 0;
   padding: 0.1rem 0.4rem;
 }
@@ -619,7 +657,7 @@ export const viewerStyles = `
 }
 
 .deck-viewer :is(.deck-brand, .deck-search-options, .deck-filter-indicator, .deck-filter-panel, .deck-filter-section, .deck-projects, .deck-panel-tags, .deck-shortcuts, .deck-project-download, .deck-detail-download, .deck-detail-context, .deck-detail)[hidden],
-.deck-viewer :is(.deck-status, .deck-panel-tags, .deck-shortcuts, .deck-filter-panel):empty {
+.deck-viewer :is(.deck-panel-tags, .deck-shortcuts, .deck-filter-panel):empty {
   display: none;
 }
 
@@ -629,10 +667,25 @@ export const viewerStyles = `
   margin-block: 0.7rem;
 }
 
+.deck-viewer .deck-status:empty {
+  margin: 0;
+}
+
+.deck-viewer .deck-load-feedback {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .deck-viewer .deck-results {
   display: grid;
   gap: 1.55rem;
   margin-block-start: 1.7rem;
+}
+
+.deck-viewer .deck-results[data-search-loading]:not(:focus-within) {
+  visibility: hidden;
 }
 
 .deck-viewer .deck-results > .deck-action {
@@ -853,25 +906,11 @@ export const viewerStyles = `
 
 @container (max-width: 49rem) {
   .deck-viewer .deck-workspace.has-selection {
-    gap: 0.8rem;
     padding-block-start: 0.8rem;
   }
 
-  .deck-viewer .deck-workspace:has(> .deck-mcp-endpoint) {
-    padding-block-start: max(2.9rem, 5cqi);
-  }
-
-  .deck-viewer .has-selection .deck-sidebar {
-    width: 100%;
-  }
-
-  .deck-viewer .has-selection .deck-sidebar :is(.deck-results, .deck-shortcuts) {
+  .deck-viewer .has-selection > .deck-sidebar {
     display: none;
-  }
-
-  .deck-viewer .has-selection .deck-detail {
-    border-block-start: 1px solid var(--deck-border);
-    padding-block-start: 0.6rem;
   }
 }
 

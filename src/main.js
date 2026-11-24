@@ -7,6 +7,7 @@ import {setDevMode} from './dev-mode.js';
 import {connectHmr} from './dev-runtime.js';
 import * as history from './history.js';
 import {viewerStyles} from './view-style.js';
+import {tokenize} from './tokenize.js';
 import './deck-demo.js';
 
 const stylesheet = new CSSStyleSheet();
@@ -14,6 +15,7 @@ stylesheet.replaceSync(viewerStyles);
 
 const instances = new WeakMap();
 const pageSize = 50;
+const searchProgressDelay = 400;
 const cardKey = card => card && JSON.stringify([card.deckId, card.path]);
 const cardRevision = card =>
   card && JSON.stringify([card.deckId, card.path, card.version, card.hash]);
@@ -70,8 +72,8 @@ function labelIcon(button, label) {
   button.setAttribute('aria-label', label);
 }
 
-function status(className = 'deck-status') {
-  const node = element('p', className);
+function status() {
+  const node = element('p', 'deck-status');
   node.setAttribute('role', 'status');
   return node;
 }
@@ -130,7 +132,7 @@ function mcpEndpoint(url, signal) {
   copy.append(address, icon('copy'));
   labelIcon(copy, 'Copy MCP endpoint');
   signal.addEventListener('abort', () => clearTimeout(reset), {once: true});
-  endpoint.append(message, copy);
+  endpoint.append(copy, message);
   return endpoint;
 }
 
@@ -182,6 +184,7 @@ export async function renderDeck({
   const sidebar = element('div', 'deck-sidebar list-view');
   const search = element('input', 'deck-search');
   search.type = 'search';
+  search.disabled = true;
   search.setAttribute('aria-label', 'Search cards');
   const searchBar = element('div', 'deck-search-bar search-bar');
   const searchIcon = element('span', 'deck-search-icon');
@@ -237,23 +240,29 @@ export async function renderDeck({
   shortcuts.setAttribute('role', 'group');
   shortcuts.setAttribute('aria-label', 'Quick filters');
   shortcuts.hidden = true;
+  const endpoint = mcpUrl && mcpEndpoint(mcpUrl, signal);
+  const loadFeedback = element('div', 'deck-load-feedback');
   const loadStatus = status();
-  const versionStatus = status('deck-status deck-version-status');
   const retryLoad = action('Retry loading decks', () => loadCollection());
   retryLoad.hidden = true;
+  loadFeedback.append(loadStatus, retryLoad);
+  const searchFeedback = element('div', 'deck-search-feedback');
   const searchStatus = status();
+  const retrySearch = action('Retry search', () => {
+    if (!retrySearch.hasAttribute('aria-disabled')) updateList({retry: true});
+  });
+  retrySearch.hidden = true;
+  searchFeedback.append(searchStatus, retrySearch);
+  const versionStatus = status();
   const offlineStatus = status();
+  const projectFeedback = element('div');
+  const sidebarFeedback = element('div');
+  projectFeedback.append(versionStatus, offlineStatus);
+  sidebarFeedback.append(projectFeedback);
   const results = element('div', 'deck-results card-list');
-  sidebar.append(
-    searchBar,
-    shortcuts,
-    loadStatus,
-    retryLoad,
-    versionStatus,
-    searchStatus,
-    offlineStatus,
-    results,
-  );
+  sidebar.append(searchBar, shortcuts);
+  if (endpoint) sidebar.append(endpoint);
+  sidebar.append(loadFeedback, searchFeedback, sidebarFeedback, results);
 
   const detail = element('article', 'deck-detail detail-view');
   detail.hidden = true;
@@ -268,10 +277,14 @@ export async function renderDeck({
   const save = action(
     null,
     () => {
-      const deck = deckFor(selected);
-      const path = selected.path;
+      const card = selected;
+      const deck = deckFor(card);
+      const {path} = card;
       const saved = offline.get(versionKey(deck)).cardPaths.includes(path);
-      return changeOffline(deck, () => (saved ? deck.removeSavedCard(path) : deck.saveCard(path)));
+      return changeOffline(deck, () => (saved ? deck.removeSavedCard(path) : deck.saveCard(path)), {
+        card,
+        remove: saved,
+      });
     },
     'deck-detail-download',
   );
@@ -284,6 +297,8 @@ export async function renderDeck({
   const detailTitle = element('h1');
   detailTitle.tabIndex = -1;
   const detailStatus = status();
+  const retryCard = action('Retry card', () => selectCard(selected, {focus: true, record: false}));
+  retryCard.hidden = true;
   const detailOfflineStatus = status();
   const content = element('section', 'deck-content');
   detail.append(
@@ -291,11 +306,11 @@ export async function renderDeck({
     detailContext,
     detailTitle,
     detailStatus,
+    retryCard,
     detailOfflineStatus,
     content,
   );
 
-  if (mcpUrl) workspace.append(mcpEndpoint(mcpUrl, signal));
   workspace.append(sidebar, detail);
   view.append(workspace);
   target.replaceChildren(view);
@@ -325,11 +340,13 @@ export async function renderDeck({
 
   options.addEventListener('toggle', () => {
     if (options.open) {
+      filterPanel.insertBefore(projectFeedback, projects);
       placeFilters();
       filterPanel.showPopover();
     } else {
       filterPanel.querySelector('.deck-version-menu:popover-open')?.hidePopover();
       filterPanel.hidePopover();
+      sidebarFeedback.append(projectFeedback);
     }
   });
   document.addEventListener(
@@ -398,6 +415,7 @@ export async function renderDeck({
   const tagsSelected = new Map();
   const offline = new Map();
   const pending = new Set();
+  const versionRequests = new Map();
   const versionsShown = new Map();
   const projectRows = new Map();
   const shortcutProjects = new Map();
@@ -417,6 +435,9 @@ export async function renderDeck({
   let limit = pageSize;
   let loadRevision = 0;
   let searchRevision = 0;
+  let searchFailure;
+  let searchProgress;
+  let retryingSearch = false;
   let detailRevision = 0;
   let navigationRevision = 0;
 
@@ -433,6 +454,7 @@ export async function renderDeck({
     },
   };
   instances.set(target, instance);
+  signal.addEventListener('abort', () => clearTimeout(searchProgress), {once: true});
 
   const deckFor = card => collection?.decks.find(deck => deck.id === card?.deckId);
   const filterDecks = () =>
@@ -484,7 +506,9 @@ export async function renderDeck({
   }
 
   function updateBrandSize() {
-    const compact = Boolean(query.trim() || selected);
+    const searching = Boolean(query.trim());
+    const compact = searching || Boolean(selected);
+    if (endpoint) endpoint.hidden = searching;
     if (hero) hero.hidden = compact;
     if (searchBrand) searchBrand.hidden = !compact;
     searchIcon.hidden = Boolean(searchBrand && compact);
@@ -543,18 +567,28 @@ export async function renderDeck({
     if (!signal.aborted) updateOfflineControls();
   }
 
-  async function changeOffline(deck, operation) {
+  async function changeOffline(deck, operation, {card, remove}) {
     const key = versionKey(deck);
     if (pending.has(key)) return;
     pending.add(key);
-    offlineStatus.textContent = '';
-    detailOfflineStatus.textContent = '';
+    const message = card ? detailOfflineStatus : offlineStatus;
+    const subject = card ? 'this card' : deck.title;
+    const isCurrent = () =>
+      !signal.aborted &&
+      collection.decks.includes(deck) &&
+      key === versionKey(deck) &&
+      (!card || cardRevision(selected) === cardRevision(card));
+    message.textContent = remove
+      ? `Removing offline copy of ${subject}…`
+      : `Saving ${subject} offline…`;
     updateOfflineControls();
     try {
       await operation();
+      if (isCurrent()) {
+        message.textContent = remove ? 'Offline copy removed.' : 'Saved for offline use.';
+      }
     } catch {
-      if (!signal.aborted && key === versionKey(deck)) {
-        const message = selected?.deckId === deck.id ? detailOfflineStatus : offlineStatus;
+      if (isCurrent()) {
         message.textContent = 'The download could not be changed. Try again.';
       }
     } finally {
@@ -569,10 +603,19 @@ export async function renderDeck({
 
   async function chooseVersion(deck, target, picker) {
     const current = collection;
+    if (versionRequests.has(deck) || deck.version === target) {
+      picker.menu.hidePopover();
+      picker.button.focus();
+      return;
+    }
     ++navigationRevision;
-    versionStatus.textContent = '';
     picker.menu.hidePopover();
-    picker.button.disabled = true;
+    const name = deck.versions.find(entry => entry.id === target)?.title ?? target;
+    const loadingMessage = `Loading ${name} of ${deck.title}…`;
+    versionRequests.set(deck, loadingMessage);
+    versionStatus.textContent = loadingMessage;
+    updateProjectControls();
+    let message = '';
     try {
       const changed = await current.setVersion(deck.id, target);
       if (!changed || signal.aborted || collection !== current) return;
@@ -582,14 +625,19 @@ export async function renderDeck({
         trigger.focus();
       }
     } catch {
-      if (!signal.aborted && collection === current) {
-        versionStatus.textContent = `Could not load version ${target} of ${deck.title}.`;
-      }
+      message = `Could not load ${name} of ${deck.title}. Try choosing it again.`;
     } finally {
-      picker.button.disabled = false;
+      versionRequests.delete(deck);
       if (!signal.aborted && current === collection) {
+        if (message || versionStatus.textContent === loadingMessage) {
+          const pendingVersion = current.decks.find(candidate => versionRequests.has(candidate));
+          versionStatus.textContent = message || versionRequests.get(pendingVersion) || '';
+        }
         updateProjectControls();
-        if (!picker.inFilters || options.open) picker.button.focus({preventScroll: true});
+        const focused = view.getRootNode().activeElement;
+        if ((!picker.inFilters || options.open) && (!focused || focused === document.body)) {
+          picker.button.focus({preventScroll: true});
+        }
       }
     }
   }
@@ -689,6 +737,7 @@ export async function renderDeck({
       if (picker) {
         const current = deck.versions.find(entry => entry.id === deck.version);
         picker.label.textContent = current?.title ?? deck.version;
+        picker.button.disabled = versionRequests.has(deck);
         labelIcon(picker.button, `Version for ${deck.title}, ${picker.label.textContent}`);
         for (const [id, option] of picker.entries) {
           option.setAttribute('aria-checked', String(id === deck.version));
@@ -716,8 +765,10 @@ export async function renderDeck({
           null,
           () => {
             const saved = offline.get(versionKey(deck)).projectSaved;
-            return changeOffline(deck, () =>
-              saved ? deck.removeSavedProject() : deck.saveProject(),
+            return changeOffline(
+              deck,
+              () => (saved ? deck.removeSavedProject() : deck.saveProject()),
+              {remove: saved},
             );
           },
           'deck-project-download',
@@ -766,7 +817,7 @@ export async function renderDeck({
           else tagsSelected.set(key, title);
           limit = pageSize;
           updateFilters();
-          if (!revealResults()) updateList();
+          updateList();
         },
       };
     });
@@ -861,89 +912,134 @@ export async function renderDeck({
     return section;
   }
 
-  async function updateList() {
+  function browseGroups() {
+    const all = collection.listCards();
+    if (tagsSelected.size) {
+      const tags = [...tagsSelected.keys()];
+      const tagged = all.filter(card =>
+        tags.every(tag => card.tags?.some(value => value.toLowerCase() === tag)),
+      );
+      return [['Results', tagged]];
+    }
+    const pinned = collection.listPinned();
+    const pinnedKeys = new Set(pinned.map(cardKey));
+    const byKey = new Map(all.map(card => [cardKey(card), card]));
+    const recent = recents
+      .filter(key => !pinnedKeys.has(key))
+      .map(key => byKey.get(key))
+      .filter(Boolean);
+    const excluded = new Set([...pinnedKeys, ...recent.map(cardKey)]);
+    return [
+      ['Pinned', pinned],
+      ['Recent', recent],
+      ['All cards', all.filter(card => !excluded.has(cardKey(card)))],
+    ];
+  }
+
+  function clearSearchProgress() {
+    clearTimeout(searchProgress);
+    delete searchFeedback.dataset.loading;
+    delete results.dataset.searchLoading;
+    results.removeAttribute('aria-busy');
+  }
+
+  async function updateList({retry = false} = {}) {
     if (!collection) return;
     const revision = ++searchRevision;
-    const filtered = query.trim() || tagsSelected.size;
-    try {
-      let groups;
-      const unavailable = [];
-      if (filtered) {
-        searchStatus.textContent = 'Searching cards…';
-        const matches = await collection.search({
-          query,
+    const decks = filterDecks();
+    const enabledDecks = collection.decks.filter(deck => collection.isEnabled(deck.id));
+    const searchableDecks = enabledDecks.filter(deck => deck.cards.length);
+    const scope = JSON.stringify(searchableDecks.map(versionKey));
+    if (searchFailure?.collection !== collection || searchFailure.scope !== scope) {
+      searchFailure = undefined;
+      retryingSearch = false;
+      searchStatus.textContent = '';
+    }
+    if (retry) retryingSearch = true;
+    const textQuery = tokenize(query).length ? query : '';
+    const attemptedQuery = textQuery || (retryingSearch && searchFailure?.query);
+    const showingProgress = searchFeedback.hasAttribute('data-loading');
+    let groups;
+    clearSearchProgress();
+    search.disabled = !collection.decks.length || Boolean(searchFailure?.complete);
+    retrySearch.hidden = !searchFailure;
+    retrySearch.removeAttribute('aria-disabled');
+
+    if (attemptedQuery && searchableDecks.length && (retryingSearch || !searchFailure?.complete)) {
+      const unavailable = new Set();
+      let matches;
+      retrySearch.setAttribute('aria-disabled', 'true');
+      results.setAttribute('aria-busy', 'true');
+      const showProgress = () => {
+        searchFeedback.dataset.loading = '';
+        searchStatus.textContent = 'Loading search…';
+        if (!searchFailure?.complete) results.dataset.searchLoading = '';
+      };
+      if (showingProgress) showProgress();
+      else searchProgress = setTimeout(showProgress, searchProgressDelay);
+      try {
+        matches = await collection.search({
+          query: attemptedQuery,
           tags: [...tagsSelected.values()],
           limit: limit + 1,
-          onError: (_, deck) => unavailable.push(deck.title),
+          onError: (_, deck) => unavailable.add(deck.id),
         });
-        if (signal.aborted || revision !== searchRevision) return;
-        groups = [['Results', matches]];
-      } else {
-        const all = collection.listCards();
-        const pinned = collection.listPinned();
-        const pinnedKeys = new Set(pinned.map(cardKey));
-        const byKey = new Map(all.map(card => [cardKey(card), card]));
-        const recent = recents
-          .filter(key => !pinnedKeys.has(key))
-          .map(key => byKey.get(key))
-          .filter(Boolean);
-        const excluded = new Set([...pinnedKeys, ...recent.map(cardKey)]);
-        groups = [
-          ['Pinned', pinned],
-          ['Recent', recent],
-          ['All cards', all.filter(card => !excluded.has(cardKey(card)))],
-        ];
+      } catch {
+        for (const deck of searchableDecks) unavailable.add(deck.id);
       }
-
-      const active = results.getRootNode().activeElement;
-      const oldFocus = results.contains(active)
-        ? [...cardButtons].find(([, button]) => button === active)?.[0]
-        : undefined;
-      cardButtons.clear();
-      results.replaceChildren();
-      const visibleGroups = groups.filter(([, items]) => items.length);
-      const decks = filterDecks();
-      let message = '';
-      if (unavailable.length) {
-        message = `Search is unavailable for ${unavailable.join(', ')}.`;
-      } else if (decks.length && decks.every(deck => !collection.isEnabled(deck.id))) {
-        message = 'No projects selected.';
-      } else if (collection.decks.length && !groups.some(([, items]) => items.length)) {
-        message = filtered ? 'No matching cards.' : 'No cards available.';
-      }
-      searchStatus.textContent = message;
-      for (const [label, items] of visibleGroups) {
-        const heading = label === 'All cards' && visibleGroups.length === 1 ? '' : label;
-        results.append(resultGroup(heading, items.slice(0, limit)));
-      }
-      if (groups.some(([, items]) => items.length > limit)) {
-        results.append(
-          action('Show more cards', () => {
-            limit += pageSize;
-            updateList();
-          }),
-        );
-      }
-      if (unavailable.length) results.append(action('Retry search', retrySearch));
-      if (oldFocus) cardButtons.get(oldFocus)?.focus({preventScroll: true});
-    } catch {
       if (signal.aborted || revision !== searchRevision) return;
-      cardButtons.clear();
-      results.replaceChildren(action('Retry search', retrySearch));
-      searchStatus.textContent = 'Search could not be loaded.';
+      clearSearchProgress();
+      retryingSearch = false;
+      const failedDecks = searchableDecks.filter(deck => unavailable.has(deck.id));
+      searchFailure = failedDecks.length
+        ? {
+            collection,
+            scope,
+            query: attemptedQuery,
+            titles: failedDecks.map(deck => deck.title),
+            complete: failedDecks.length === searchableDecks.length,
+          }
+        : undefined;
+      if (textQuery && !searchFailure?.complete) groups = [['Results', matches]];
     }
-  }
 
-  function retrySearch() {
-    return suppliedCollection ? updateList() : loadCollection();
-  }
-
-  function revealResults() {
-    if (!selected || getComputedStyle(results).display !== 'none') return false;
-    options.open = false;
-    selectCard(null, {navigate: true});
-    search.focus({preventScroll: true});
-    return true;
+    groups ??= browseGroups();
+    const active = results.getRootNode().activeElement;
+    const oldFocus = results.contains(active)
+      ? [...cardButtons].find(([, button]) => button === active)?.[0]
+      : undefined;
+    search.disabled = !collection.decks.length || Boolean(searchFailure?.complete);
+    retrySearch.hidden = !searchFailure;
+    retrySearch.removeAttribute('aria-disabled');
+    if (searchFailure?.complete && active === search) retrySearch.focus({preventScroll: true});
+    if (!searchFailure && active === retrySearch) search.focus({preventScroll: true});
+    cardButtons.clear();
+    results.replaceChildren();
+    const visibleGroups = groups.filter(([, items]) => items.length);
+    let message = '';
+    if (searchFailure?.complete) {
+      message = 'Search could not be loaded. You can still browse cards.';
+    } else if (searchFailure) {
+      message = `Search is unavailable for ${searchFailure.titles.join(', ')}.`;
+    } else if (decks.length && !enabledDecks.length) {
+      message = 'No projects selected.';
+    } else if (collection.decks.length && !visibleGroups.length) {
+      message = textQuery || tagsSelected.size ? 'No matching cards.' : 'No cards available.';
+    }
+    searchStatus.textContent = message;
+    for (const [label, items] of visibleGroups) {
+      const heading = label === 'All cards' && visibleGroups.length === 1 ? '' : label;
+      results.append(resultGroup(heading, items.slice(0, limit)));
+    }
+    if (groups.some(([, items]) => items.length > limit)) {
+      results.append(
+        action('Show more cards', () => {
+          limit += pageSize;
+          updateList();
+        }),
+      );
+    }
+    if (oldFocus) cardButtons.get(oldFocus)?.focus({preventScroll: true});
   }
 
   async function selectCard(card, {navigate = false, focus = false, record = true} = {}) {
@@ -953,10 +1049,13 @@ export async function renderDeck({
     const revision = ++detailRevision;
     if (navigation && navigate) history.pushState(cardQuery(card));
     workspace.classList.toggle('has-selection', Boolean(card));
+    if (card && options.open && getComputedStyle(sidebar).display === 'none') options.open = false;
     detail.hidden = !card;
     content.replaceChildren();
     detailOfflineStatus.textContent = '';
     detailStatus.textContent = '';
+    retryCard.hidden = true;
+    content.removeAttribute('aria-busy');
     updateOfflineControls();
     if (!card) {
       updateList();
@@ -976,6 +1075,7 @@ export async function renderDeck({
     detailContext.hidden = !context;
     detailContext.textContent = context;
     detailStatus.textContent = 'Loading card…';
+    content.setAttribute('aria-busy', 'true');
     if (record) recordRecent(card);
     updateList();
     if (focus) detailTitle.focus();
@@ -992,8 +1092,11 @@ export async function renderDeck({
       detailStatus.textContent = '';
     } catch {
       if (signal.aborted || revision !== detailRevision) return;
+      content.replaceChildren();
       detailStatus.textContent = 'This card could not be loaded.';
-      content.append(action('Retry card', () => selectCard(card, {record: false})));
+      retryCard.hidden = false;
+    } finally {
+      if (!signal.aborted && revision === detailRevision) content.removeAttribute('aria-busy');
     }
   }
 
@@ -1065,11 +1168,14 @@ export async function renderDeck({
 
   async function loadCollection() {
     const revision = ++loadRevision;
-    retryLoad.hidden = true;
-    if (!collection) loadStatus.textContent = 'Loading decks…';
+    retryLoad.disabled = true;
+    loadStatus.textContent = collection?.decks.length
+      ? 'Refreshing decks…'
+      : `Loading ${qualifyRoutes ? 'decks' : 'deck'}…`;
     const previous = collection;
     let next;
     let failed = 0;
+    let retained = 0;
     try {
       if (suppliedCollection) {
         next = suppliedCollection;
@@ -1092,13 +1198,17 @@ export async function renderDeck({
           const manifest = sourceManifest(source);
           const url = manifest && new URL(manifest, document.baseURI).href;
           const existing = previous?.decks.find(deck => deck.id === (source.id ?? url));
+          if (existing) retained++;
           return existing ? [existing] : [];
         });
         next = composeDecks(ready);
       }
-    } catch (error) {
+    } catch {
       if (signal.aborted || revision !== loadRevision) return;
-      loadStatus.textContent = error.message;
+      loadStatus.textContent = previous?.decks.length
+        ? 'Could not refresh decks. Showing the last loaded data.'
+        : 'Could not load the deck configuration.';
+      retryLoad.disabled = false;
       retryLoad.hidden = false;
       return;
     }
@@ -1124,9 +1234,15 @@ export async function renderDeck({
     unsubscribe?.();
     collection = next;
     unsubscribe = next.subscribe(onCollectionChange);
-    loadStatus.textContent = failed
-      ? `${failed === 1 ? 'One deck could' : `${failed} decks could`} not be loaded.`
-      : '';
+    if (failed) {
+      const decks = qualifyRoutes ? (failed === 1 ? 'one deck' : `${failed} decks`) : 'the deck';
+      loadStatus.textContent = retained
+        ? `Could not refresh ${decks}. Showing previously loaded data where available.`
+        : `Could not load ${decks}.`;
+    } else {
+      loadStatus.textContent = '';
+    }
+    retryLoad.disabled = false;
     retryLoad.hidden = !failed;
     updateBrand();
     renderProjects();
@@ -1157,7 +1273,7 @@ export async function renderDeck({
     openVersionPicker?.menu.hidePopover();
     updateBrandSize();
     if (navigation) history.replaceState({q: query});
-    if (!revealResults()) updateList();
+    updateList();
   });
   detail.addEventListener('keydown', event => {
     if (event.key === 'Escape' && selected && !event.defaultPrevented) {

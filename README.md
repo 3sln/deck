@@ -157,9 +157,9 @@ Increase the root `package.json` version and merge it to `main`. The release
 workflow runs the tests, publishes to npm, and creates a GitHub release for
 `v<version>`. Prereleases use npm's `next` tag.
 
-The workflow can use the `NPM_TOKEN` repository secret or npm trusted publishing.
-For trusted publishing, authorize `publish.yml` in the `@3sln/deck` npm package
-settings and enable direct `npm publish`. [npm trusted publishing setup](https://docs.npmjs.com/trusted-publishers/)
+The workflow uses npm trusted publishing by default. Authorize `publish.yml` in
+the `@3sln/deck` npm package settings and enable direct `npm publish`.
+[npm trusted publishing setup](https://docs.npmjs.com/trusted-publishers/)
 
 Run the Release Deck workflow manually on `main` to retry its current version.
 Manual runs use trusted publishing unless you select the `NPM_TOKEN` option.
