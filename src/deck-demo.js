@@ -19,7 +19,7 @@ const PANES_LEFT = Object.freeze({left: true, right: false});
 
 function getLanguageFromPath(path) {
   if (!path) return 'plaintext';
-  const extension = path.split('.').pop().toLowerCase();
+  const extension = path.split(/[?#]/, 1)[0].split('.').pop().toLowerCase();
   switch (extension) {
     case 'js':
     case 'mjs':
@@ -67,24 +67,24 @@ const propertiesStyle = css`
     gap: 1em;
     margin-bottom: 0.75em;
     width: 250px;
-    color: var(--text-color);
+    color: var(--deck-text, var(--text-color));
   }
   .property-item input {
     flex-grow: 0;
   }
   input[type='text'] {
     background: rgba(0, 0, 0, 0.1);
-    border: 1px solid var(--input-border);
+    border: 1px solid var(--deck-input-border, var(--input-border));
     border-radius: 4px;
     padding: 0.5em;
-    color: var(--text-color);
+    color: var(--deck-text, var(--text-color));
   }
   input[type='range'] {
-    accent-color: var(--link-color);
+    accent-color: var(--deck-accent, var(--link-color));
   }
 `;
 
-function getEngine(rootNode, key, src, canonicalSrc) {
+function getEngine(rootNode, key, src, canonicalSrc, devBase) {
   if (!rootNodeCaches.has(rootNode)) {
     rootNodeCaches.set(rootNode, new Map());
   }
@@ -100,7 +100,7 @@ function getEngine(rootNode, key, src, canonicalSrc) {
     return entry.engine;
   }
 
-  const {engine, abortController} = createEngine(src, canonicalSrc);
+  const {engine, abortController} = createEngine(src, canonicalSrc, devBase);
   const entry = {
     engine,
     refCount: 1,
@@ -177,7 +177,7 @@ const propertyControl = alias((engine, name) => {
   });
 });
 
-function createEngine(src, canonicalSrc) {
+function createEngine(src, canonicalSrc, devBase) {
   const abortController = new AbortController();
   const sourceCode$ = cell('Loading...');
   const textSrc = canonicalSrc || src;
@@ -276,18 +276,27 @@ function createEngine(src, canonicalSrc) {
   };
 
   (async () => {
-    const esmSrc = src;
-    if (!esmSrc || !textSrc) return;
+    if (!src || !textSrc) return;
 
     try {
       // The dev server serves two generated modules per demo — the module
       // proxy and its source text — in whichever dialect it speaks. A
       // production build has neither, and imports the real thing.
-      if (isDev()) {
-        const esm = await import(/* @vite-ignore */ `/@deck-dev-esm/${encodeURIComponent(esmSrc)}`);
-        const txt = await import(
-          /* @vite-ignore */ `/@deck-dev-src/${encodeURIComponent(textSrc)}.js`
-        );
+      const esmUrl = new URL(src, document.baseURI);
+      const textUrl = new URL(textSrc, document.baseURI);
+      const base = devBase && new URL(devBase);
+      const local = url =>
+        base && url.origin === base.origin && url.pathname.startsWith(base.pathname);
+      if (local(esmUrl) && local(textUrl)) {
+        const esmPath = '/' + esmUrl.pathname.slice(base.pathname.length) + esmUrl.search;
+        const textPath = '/' + textUrl.pathname.slice(base.pathname.length);
+        const esmModule = new URL(`./@deck-dev-esm/${encodeURIComponent(esmPath)}`, base);
+        const srcModule = new URL(`./@deck-dev-src/${encodeURIComponent(textPath)}.js`, base);
+        const [esm, txt] = await Promise.all([
+          import(/* @vite-ignore */ /* webpackIgnore: true */ esmModule.href),
+          import(/* @vite-ignore */ /* webpackIgnore: true */ srcModule.href),
+        ]);
+        if (abortController.signal.aborted) return;
 
         const sub = txt.moduleText$.subscribe(text => {
           sourceCode$.setValue(text);
@@ -297,15 +306,16 @@ function createEngine(src, canonicalSrc) {
         });
         esm.default(driver);
       } else {
-        const esmUrl = new URL(esmSrc, location.href);
-        const textUrl = new URL(textSrc, location.href);
-        const m = await import(/* @vite-ignore */ esmUrl.href);
+        const m = await import(/* @vite-ignore */ /* webpackIgnore: true */ esmUrl.href);
+        if (abortController.signal.aborted) return;
         m.default(driver);
 
-        const text = await fetch(textUrl).then(r => r.text());
-        sourceCode$.setValue(text);
+        const response = await fetch(textUrl, {signal: abortController.signal});
+        if (!response.ok) throw new Error(`Could not load demo source (HTTP ${response.status})`);
+        sourceCode$.setValue(await response.text());
       }
     } catch (err) {
+      if (abortController.signal.aborted) return;
       console.error(`Failed to load demo module ${src}:`, err);
       driver.panel('Error', container => {
         reconcile(container, [
@@ -685,10 +695,10 @@ const demoStyle = css`
    */
   :host {
     display: flex;
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--deck-border, var(--border-color));
     border-radius: 4px;
     margin-bottom: 1em;
-    background-color: var(--card-bg);
+    background-color: var(--deck-surface, var(--card-bg));
     /*
      * The cap is viewport-relative as well as absolute, because on a phone
      * only one pane shows at a time: the demo is sized by whichever panel is
@@ -704,7 +714,7 @@ const demoStyle = css`
   .pane {
     display: flex;
     flex-direction: column;
-    border-right: 1px solid var(--border-color);
+    border-right: 1px solid var(--deck-border, var(--border-color));
     min-width: 0;
   }
   .pane:last-child {
@@ -712,16 +722,16 @@ const demoStyle = css`
   }
   .tabs {
     display: flex;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--deck-border, var(--border-color));
     flex-shrink: 0;
     overflow-x: auto;
   }
   .tab label {
     padding: 10px 16px;
     cursor: pointer;
-    border-right: 1px solid var(--border-color);
-    background: var(--bg-color);
-    color: var(--text-color);
+    border-right: 1px solid var(--deck-border, var(--border-color));
+    background: var(--deck-background, var(--bg-color));
+    color: var(--deck-text, var(--text-color));
     opacity: 0.7;
     white-space: nowrap;
     transition:
@@ -734,14 +744,14 @@ const demoStyle = css`
     display: none;
   }
   .tab input[type='radio']:checked + label {
-    background: var(--card-bg);
-    color: var(--text-color);
+    background: var(--deck-surface, var(--card-bg));
+    color: var(--deck-text, var(--text-color));
     opacity: 1;
-    border-bottom: 1px solid var(--card-bg);
+    border-bottom: 1px solid var(--deck-surface, var(--card-bg));
     margin-bottom: -1px;
   }
   .tab label:hover {
-    background: var(--card-hover-bg);
+    background: var(--deck-hover, var(--card-hover-bg));
     opacity: 1;
   }
   /*
@@ -794,7 +804,8 @@ const demoStyle = css`
 
 class DeckDemo extends HTMLElement {
   #engine;
-  #id;
+  #key;
+  #cacheOwner;
 
   constructor() {
     super();
@@ -810,24 +821,25 @@ class DeckDemo extends HTMLElement {
       return;
     }
 
-    this.#id = this.id;
-    this.#engine = getEngine(
-      this.getRootNode(),
-      this.#id,
-      this.getAttribute('src'),
-      this.getAttribute('canonical-src'),
-    );
+    const src = this.getAttribute('src');
+    const canonicalSrc = this.getAttribute('canonical-src');
+    const devBase =
+      this.dataset.deckDevBase ?? (isDev() ? new URL('.', document.baseURI).href : '');
+    this.#key = JSON.stringify([this.id, src, canonicalSrc, devBase]);
+    this.#cacheOwner = this.closest('.deck-viewer') ?? this.getRootNode();
+    this.#engine = getEngine(this.#cacheOwner, this.#key, src, canonicalSrc, devBase);
     this.#render();
   }
 
   disconnectedCallback() {
-    if (!this.#id) {
+    if (!this.#key) {
       return;
     }
 
     reconcile(this.shadowRoot, null);
-    releaseEngine(this.getRootNode(), this.#id);
-    this.#id = undefined;
+    releaseEngine(this.#cacheOwner, this.#key);
+    this.#cacheOwner = undefined;
+    this.#key = undefined;
     this.#engine = undefined;
   }
 
@@ -954,4 +966,4 @@ class DeckDemo extends HTMLElement {
   }
 }
 
-customElements.define('deck-demo', DeckDemo);
+if (!customElements.get('deck-demo')) customElements.define('deck-demo', DeckDemo);

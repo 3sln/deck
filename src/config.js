@@ -122,6 +122,14 @@ export function getHtmlTemplate({
   scripts = [],
   stylesheets = [],
   searchIndexUrl = null,
+  manifestUrl,
+  id,
+  decks = [],
+  brand,
+  theme,
+  suggestedTags,
+  mcpUrl,
+  serviceWorkerUrl,
   dev = false,
   headExtra = '',
 }) {
@@ -147,7 +155,7 @@ export function getHtmlTemplate({
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
-    <title>${escapeHtml(title ?? 'Deck')}</title>
+    <title>${escapeHtml(brand?.name ?? title ?? 'Deck')}</title>
     ${description ? `<meta name="description" content="${escapeHtml(description)}">` : ''}
     ${favicon ? `<link rel="icon" href="${escapeHtml(favicon)}">` : ''}
     ${
@@ -158,35 +166,22 @@ export function getHtmlTemplate({
       This page is an application; the deck's content is these files. An agent
       that cannot run it should read one of them instead of this.
     -->
-    <link rel="alternate" type="text/markdown" href="/agents.md" title="The whole deck as one Markdown document">
-    <link rel="alternate" type="text/plain" href="/llms.txt" title="An index of every card">`
+    <link rel="alternate" type="text/markdown" href="./agents.md" title="The whole deck as one Markdown document">
+    <link rel="alternate" type="text/plain" href="./llms.txt" title="An index of every card">`
     }
     ${styleTags}
     ${importMap ? `<script type="importmap">${escapeJson(importMap)}</script>` : ''}
     ${headExtra}
     <style>
       *, *::before, *::after { box-sizing: border-box; }
-      :root {
-        --bg-color: #fff; --text-color: #222; --muted-color: #666; --border-color: #e5e5e5;
-        --card-bg: #fff; --card-hover-bg: #f6f6f6; --input-bg: #fff; --input-border: #ddd;
-        --link-color: #007aff; --focus-ring: rgba(0, 122, 255, 0.35);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg-color: #121212; --text-color: #eee; --muted-color: #9a9a9a; --border-color: #333;
-          --card-bg: #1e1e1e; --card-hover-bg: #2a2a2a; --input-bg: #2a2a2a; --input-border: #444;
-          --link-color: #09f; --focus-ring: rgba(0, 153, 255, 0.4);
-        }
-      }
       html { -webkit-text-size-adjust: 100%; }
+      #root > .deck-viewer { min-height: 100dvh; }
       body {
-        background-color: var(--bg-color); color: var(--text-color);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background: Canvas;
         margin: 0; padding: 0;
         /* A phone's notch is not a place to put a card. */
         padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);
       }
-      a { color: var(--link-color); }
     </style>
     ${cssFiles.map(file => `<link rel="stylesheet" href="${escapeHtml(file)}">`).join('\n')}
     ${scriptTags}
@@ -195,17 +190,30 @@ export function getHtmlTemplate({
     <div id="root"></div>
     <div style="display: none;" aria-hidden="true">
       This is a Single Page Application. Agents should read
-      <a href="/llms.txt">/llms.txt</a> for an index of every card, or
-      <a href="/agents.md">/agents.md</a> (<a href="/agents.html">/agents.html</a>)
+      <a href="./llms.txt">llms.txt</a> for an index of every card, or
+      <a href="./agents.md">agents.md</a> (<a href="./agents.html">agents.html</a>)
       for the whole deck as one document.
     </div>
     <script type="module">
-      import { renderDeck } from '${entryFile}';
+      import { renderDeck } from ${escapeJson(entryFile)};
       renderDeck({
         target: document.getElementById('root'),
-        initialCardsData: ${escapeJson(initialCardsData)},
+        ${
+          manifestUrl
+            ? `...${escapeJson({
+                title,
+                decks: [{manifestUrl, id}, ...decks],
+                brand,
+                theme,
+                suggestedTags,
+                mcpUrl,
+                serviceWorkerUrl,
+                navigation: true,
+              })},`
+            : `initialCardsData: ${escapeJson(initialCardsData)},
         pinnedCardPaths: ${escapeJson(pinnedCardPaths ?? [])},
-        searchIndexUrl: ${escapeJson(searchIndexUrl)},
+        searchIndexUrl: ${escapeJson(searchIndexUrl)},`
+        }
         dev: ${dev ? 'true' : 'false'},
       });
     </script>

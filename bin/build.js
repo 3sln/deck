@@ -24,17 +24,27 @@ import {
   getHtmlTemplate,
   toWebPath,
 } from '../src/config.js';
-import {extractCard} from '../src/card-text.js';
-import {scoreCard} from '../src/tokenize.js';
-import {encodeIndex, INDEX_FILE} from '../src/search-index.js';
+import {createArtifacts, describeCard, encodePath, MANIFEST_FILE} from '../src/artifacts.js';
+import {INDEX_FILE} from '../src/search-index.js';
 import {demoBuildOptions} from '../src/dev-core.js';
 import {robotsTxt, sitemapXml, llmsTxt} from '../src/discovery.js';
 import {demoTagsIn, withAttribute} from '../src/demo-tags.js';
+import {stripFrontMatter} from '../src/frontmatter.js';
 
 const userRoot = process.cwd();
 const deckRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const DEMO_BUNDLE_DIR = 'assets/demos';
+
+function isInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith('..' + path.sep) &&
+    !path.isAbsolute(relative)
+  );
+}
 
 /**
  * Bundles every demo module a card references, and points the card at the
@@ -114,10 +124,11 @@ async function inlineDemos(content, outDir) {
     const relativePath = src.startsWith('/') ? src.slice(1) : src;
     const demoFilePath = path.resolve(outDir, relativePath);
 
-    if (!(await fs.pathExists(demoFilePath))) {
+    if (!isInside(outDir, demoFilePath) || !(await fs.pathExists(demoFilePath))) {
       console.warn(`Warning: could not find demo file for ${src}`);
       continue;
     }
+    if (!isInside(outDir, await fs.realpath(demoFilePath))) continue;
     const demoContent = await fs.readFile(demoFilePath, 'utf-8');
     replacements.push({
       start: index,
@@ -173,16 +184,19 @@ async function build() {
 
   const outDir = path.resolve(userRoot, buildConfig.outDir);
   const assetsDir = path.resolve(outDir, 'assets');
+  const stockUi = buildConfig.ui !== false;
+  const realOutput = (await fs.pathExists(outDir)) ? await fs.realpath(outDir) : outDir;
+  if (realOutput === userRoot || isInside(realOutput, userRoot)) {
+    throw new Error('The output directory cannot contain the project root');
+  }
 
+  const outsideOutput = file => !isInside(outDir, path.resolve(userRoot, file));
+  const filesToCopy = getProjectFiles(userRoot, buildConfig).filter(outsideOutput);
+  const cardFiles = getCardFiles(userRoot, buildConfig).filter(outsideOutput).sort();
   await fs.emptyDir(outDir);
   console.log(`Cleaned ${outDir}`);
 
-  console.log('Bundling application assets...');
-  const {entryFile, outputs} = await bundleApp(assetsDir);
-  console.log(`Application bundled to ${entryFile}`);
-
   console.log('Copying project files...');
-  const filesToCopy = getProjectFiles(userRoot, buildConfig);
   for (const file of filesToCopy) {
     const source = path.resolve(userRoot, file);
     const dest = path.resolve(outDir, file);
@@ -196,6 +210,9 @@ async function build() {
     for (const [source, dest] of Object.entries(buildConfig.pick)) {
       const sourcePath = path.resolve(userRoot, source);
       const destPath = path.resolve(outDir, dest);
+      if (destPath !== outDir && !isInside(outDir, destPath)) {
+        throw new Error(`Picked destination must stay in the output directory: ${dest}`);
+      }
       if (await fs.pathExists(sourcePath)) {
         console.log(`Picking '${source}' to '${dest}'...`);
         await fs.copy(sourcePath, destPath, {dereference: true});
@@ -205,7 +222,6 @@ async function build() {
     }
   }
 
-  const cardFiles = getCardFiles(userRoot, buildConfig);
   let agentsIndex =
     '# Agents Index\n\n' +
     'This file contains the concatenated content of all cards to help LLMs ' +
@@ -213,13 +229,12 @@ async function build() {
 
   const cards = [];
   const bundledDemos = new Map();
+  const reserved = new Set(['agents.md', 'agents.html', ...(stockUi ? ['index.html'] : [])]);
+  let cardDir = 'deck-content';
+  while (await fs.pathExists(path.join(outDir, cardDir))) cardDir += '-cards';
   for (const file of cardFiles) {
     const filePath = path.resolve(outDir, file);
     const raw = await fs.readFile(filePath, 'utf-8');
-
-    // The agent index gets the card as written, demo sources and all. The
-    // browser gets a copy whose demo tags point at bundles.
-    agentsIndex += `\n\n---\n\n# ${extractCard(file, raw).title} (${toWebPath(file)})\n\n${await inlineDemos(raw, outDir)}`;
 
     const served = await bundleDemos(raw, {
       userRoot,
@@ -227,25 +242,19 @@ async function build() {
       bundled: bundledDemos,
       esbuildOptions: buildConfig.esbuild,
     });
-    if (served !== raw) await fs.writeFile(filePath, served);
-
-    // Hashed and indexed from what is actually served, so the browser's copy
-    // and the index describe the same bytes.
-    const hash = await sha256(served);
-    const {title, summary, text} = extractCard(file, served);
-
-    cards.push({
-      path: toWebPath(file),
-      hash,
-      title,
-      summary,
-      scores: scoreCard({title, summary, body: text}),
-    });
+    const contentUrl = reserved.has(file) ? `./${cardDir}/${encodePath(file)}` : undefined;
+    if (contentUrl) await fs.outputFile(path.resolve(outDir, cardDir, file), served);
+    else if (served !== raw) await fs.writeFile(filePath, served);
+    const card = await describeCard(file, served, contentUrl);
+    cards.push(card);
+    const body = card.format === 'markdown' ? stripFrontMatter(raw) : raw;
+    agentsIndex += `\n\n---\n\n# ${card.title} (${card.path})\n\n${await inlineDemos(body, outDir)}`;
   }
   console.log(`Found and processed ${cards.length} cards.`);
   if (bundledDemos.size > 0) {
     console.log(`Bundled ${bundledDemos.size} demo module(s).`);
   }
+  const {manifest, index} = createArtifacts(cards, buildConfig);
 
   console.log('Writing agents.md and agents.html...');
   await fs.writeFile(path.resolve(outDir, 'agents.md'), agentsIndex);
@@ -268,7 +277,7 @@ ${marked.parse(agentsIndex)}
   console.log('Writing robots.txt and llms.txt...');
   await fs.writeFile(
     path.resolve(outDir, 'robots.txt'),
-    robotsTxt({title: buildConfig.title, url: buildConfig.url}),
+    robotsTxt({title: buildConfig.title, url: buildConfig.url, ui: stockUi}),
   );
   await fs.writeFile(
     path.resolve(outDir, 'llms.txt'),
@@ -276,55 +285,59 @@ ${marked.parse(agentsIndex)}
       title: buildConfig.title,
       description: buildConfig.description,
       url: buildConfig.url,
-      cards,
+      cards: manifest.cards,
     }),
   );
   if (buildConfig.url) {
+    const showsPublishedVersion =
+      buildConfig.defaultVersion == null ||
+      buildConfig.defaultVersion === (buildConfig.version ?? 'current');
     await fs.writeFile(
       path.resolve(outDir, 'sitemap.xml'),
-      sitemapXml({url: buildConfig.url, cards}),
+      sitemapXml({
+        url: buildConfig.url,
+        cards: manifest.cards,
+        ui: stockUi && showsPublishedVersion,
+      }),
     );
     console.log(`Sitemap written for ${buildConfig.url}.`);
   } else {
     console.log('No `url` in the deck config, so no sitemap; robots.txt names none.');
   }
 
-  // The precompiled index. The browser downloads this before any card, which is
-  // what lets the very first search cover the whole deck instead of covering
-  // whatever happened to have finished downloading.
+  // The UI and headless clients share this catalog and precompiled index.
   console.log('Building search index...');
-  const searchIndex = encodeIndex(cards);
-  await fs.writeJson(path.resolve(outDir, INDEX_FILE), searchIndex);
+  await fs.writeJson(path.resolve(outDir, MANIFEST_FILE), manifest);
+  await fs.writeJson(path.resolve(outDir, INDEX_FILE), index);
   const indexBytes = (await fs.stat(path.resolve(outDir, INDEX_FILE))).size;
   console.log(
-    `Search index: ${cards.length} cards, ${Object.keys(searchIndex.terms).length} terms, ` +
+    `Search index: ${cards.length} cards, ${Object.keys(index.terms).length} terms, ` +
       `${(indexBytes / 1024).toFixed(1)} kB.`,
   );
 
-  console.log('Generating asset manifest...');
+  if (!stockUi) {
+    console.log('Data-only build complete.');
+    return;
+  }
+
+  const {entryFile, outputs} = await bundleApp(assetsDir);
   await fs.writeJson(path.resolve(outDir, 'asset-manifest.json'), {
-    files: [...filesToCopy.map(toWebPath), ...outputs, ...bundledDemos.values(), `/${INDEX_FILE}`],
+    files: ['./', './index.html', ...outputs.map(file => '.' + file)],
   });
 
-  await fs.copy(path.resolve(deckRoot, 'src/sw.js'), path.resolve(outDir, 'sw.js'));
-
-  console.log('Generating production index.html...');
+  const html = getHtmlTemplate({
+    ...buildConfig,
+    manifestUrl: './' + MANIFEST_FILE,
+    entryFile: '.' + entryFile,
+    serviceWorkerUrl: './sw.js',
+  });
+  const revision = await sha256(html);
+  const worker = await fs.readFile(path.resolve(deckRoot, 'src/sw.js'), 'utf8');
   await fs.writeFile(
-    path.resolve(outDir, 'index.html'),
-    getHtmlTemplate({
-      title: buildConfig.title,
-      description: buildConfig.description,
-      importMap: buildConfig.importMap,
-      initialCardsData: cards.map(({path: cardPath, hash}) => ({path: cardPath, hash})),
-      pinnedCardPaths: buildConfig.pinned,
-      entryFile,
-      favicon: buildConfig.favicon,
-      scripts: buildConfig.scripts,
-      stylesheets: buildConfig.stylesheets,
-      searchIndexUrl: `/${INDEX_FILE}`,
-      dev: false,
-    }),
+    path.resolve(outDir, 'sw.js'),
+    worker.replace('DECK_SHELL_REVISION', revision),
   );
+  await fs.writeFile(path.resolve(outDir, 'index.html'), html);
 
   console.log('Build complete!');
 }

@@ -39,12 +39,14 @@ export function cardUrl(baseUrl, cardPath) {
   return `${trimSlash(baseUrl)}/?c=${encodeURIComponent(cardPath)}`;
 }
 
-export function robotsTxt({title, url} = {}) {
+export function robotsTxt({title, url, ui = true} = {}) {
   const lines = [
     `# ${title ?? 'Deck'}`,
     '#',
-    '# This is a single-page application. The whole deck is also available as',
-    '# plain documents, which is what you probably want if you are not a browser:',
+    ...(ui
+      ? ['# This is a single-page application. The whole deck is also available as']
+      : ['# The whole deck is available as']),
+    '# plain documents:',
     '#',
     '#   /llms.txt      an index of every card, linking to its Markdown',
     '#   /agents.md     every card concatenated, with demo sources inlined',
@@ -60,11 +62,19 @@ export function robotsTxt({title, url} = {}) {
   return lines.join('\n');
 }
 
-export function sitemapXml({url, cards}) {
+function rawCardPath(card) {
+  return (
+    card.contentUrl?.replace(/^\.\//, '/') ?? card.path.split('/').map(encodeURIComponent).join('/')
+  );
+}
+
+export function sitemapXml({url, cards, ui = true}) {
   const entries = [
-    `  <url>\n    <loc>${xmlEscape(trimSlash(url) + '/')}</loc>\n  </url>`,
-    ...cards.map(card => `  <url>\n    <loc>${xmlEscape(cardUrl(url, card.path))}</loc>\n  </url>`),
-  ];
+    ...(ui ? [trimSlash(url) + '/'] : []),
+    ...cards.map(card =>
+      ui ? cardUrl(url, card.slug ?? card.path) : trimSlash(url) + rawCardPath(card),
+    ),
+  ].map(link => `  <url>\n    <loc>${xmlEscape(link)}</loc>\n  </url>`);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${entries.join('\n')}
@@ -96,7 +106,7 @@ export function llmsTxt({title, description, cards, url}) {
 
   for (const card of cards) {
     const summary = card.summary ? `: ${card.summary.replace(/\s+/g, ' ').trim()}` : '';
-    lines.push(`- [${card.title}](${absolute(card.path)})${summary}`);
+    lines.push(`- [${card.title}](${absolute(rawCardPath(card))})${summary}`);
   }
 
   lines.push('', '## Optional', '', `- [Everything, in one file](${absolute('/agents.md')})`);

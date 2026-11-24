@@ -37,10 +37,11 @@ import {
   EVENTS_PATH,
   CLIENT_PATH,
   APP_PATH,
+  isArtifactPath,
 } from './dev-core.js';
 
-const send = (res, body, type) => {
-  res.writeHead(200, {
+const send = (res, body, type, status = 200) => {
+  res.writeHead(status, {
     'Content-Type': type,
     'Cache-Control': 'no-store',
   });
@@ -80,6 +81,12 @@ export function createDeckMiddleware({root = process.cwd()} = {}) {
     }
 
     try {
+      if (isArtifactPath(pathname)) {
+        const {body, type, status} = await (await ready()).artifactResponse(pathname);
+        send(res, req.method === 'HEAD' ? undefined : body, type + '; charset=utf-8', status);
+        return;
+      }
+
       if (pathname === CLIENT_PATH) {
         send(res, clientModule(), 'text/javascript; charset=utf-8');
         return;
@@ -117,6 +124,7 @@ export function createDeckMiddleware({root = process.cwd()} = {}) {
 
       if (pathname === '/' || pathname === '/index.html') {
         await ready();
+        if (deck.config.ui === false) return next?.();
         send(res, await deck.indexHtml({entryFile: APP_PATH}), 'text/html; charset=utf-8');
         return;
       }

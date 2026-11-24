@@ -25,15 +25,11 @@ jobs:
         uses: oven-sh/setup-bun@v1
 
       - name: Install root dependencies
-        run: bun install
-
-      - name: Install deck dependencies
-        working-directory: ./deck
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build
         working-directory: ./deck
-        run: bun run build
+        run: bun ../bin/build.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

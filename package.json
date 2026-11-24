@@ -1,6 +1,6 @@
 {
   "name": "@3sln/deck",
-  "version": "0.0.17",
+  "version": "0.0.18",
   "description": "Scalable, zero-config, Markdown-based component playgrounds and documentation sites. Runs on Vite, @web/dev-server, Rspack/webpack, or its own bundler-free dev server.",
   "type": "module",
   "author": "Ray Stubbs",
@@ -30,7 +30,10 @@
     "./wds-plugin": "./wds-plugin.js",
     "./webpack-plugin": "./webpack-plugin.js",
     "./dev-core": "./src/dev-core.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./data": "./src/data.js",
+    "./offline": "./src/offline.js",
+    "./mcp": "./src/mcp.js"
   },
   "bin": {
     "deck-build": "./bin/build.js",
@@ -53,7 +56,8 @@
     "fs-extra": "^11.3.2",
     "glob": "^10.3.10",
     "highlight.js": "^11.9.0",
-    "marked": "^16.3.0"
+    "marked": "^16.3.0",
+    "yaml": "^2.9.1"
   },
   "peerDependencies": {
     "vite": ">=5"

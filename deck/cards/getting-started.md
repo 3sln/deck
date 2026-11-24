@@ -1,3 +1,7 @@
+---
+tags: [getting started, dev server]
+---
+
 # Getting Started
 
 A Deck project is typically created as a sub-project to document a larger library or application. It's common to create the deck inside a subdirectory like `/deck` or `/docs` within your main project.
@@ -25,9 +29,6 @@ In your `package.json`, add scripts and a `@3sln/deck` configuration block. You 
     "dev": "deck-dev",
     "build": "deck-build"
   },
-  "devDependencies": {
-    "@3sln/deck": "^0.0.14"
-  },
   "@3sln/deck": {
     "title": "My Cool Project"
   }
@@ -37,6 +38,20 @@ In your `package.json`, add scripts and a `@3sln/deck` configuration block. You 
 ## 3. Add Content
 
 Create your documentation files using Markdown (`.md`). You can organize them in any directory structure you like.
+
+Use YAML front matter to give a card searchable tags and optionally override its title or summary. The stock UI can suggest tags and filter its results by tag.
+
+```markdown
+---
+title: Button
+summary: Add a button to a form or dialog.
+tags: [components, forms]
+---
+
+# Button
+
+A button triggers an action.
+```
 
 ```
 my-project/

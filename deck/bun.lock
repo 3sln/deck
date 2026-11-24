@@ -14,7 +14,7 @@
     },
   },
   "packages": {
-    "@3sln/deck": ["@3sln/deck@file:..", { "dependencies": { "@3sln/dodo": "^0.0.10", "@3sln/ngin": "^0.0.4", "esbuild": "^0.25.0", "fs-extra": "^11.3.2", "glob": "^10.3.10", "highlight.js": "^11.9.0", "marked": "^16.3.0" }, "devDependencies": { "@web/dev-server": "^0.4.6", "happy-dom": "^18.0.1", "prettier": "^3.6.2", "vite": "^5.4.20" }, "peerDependencies": { "vite": ">=5" }, "optionalPeers": ["vite"], "bin": { "deck-build": "./bin/build.js", "deck-dev": "./bin/dev.js" } }],
+    "@3sln/deck": ["@3sln/deck@file:..", { "dependencies": { "@3sln/dodo": "^0.0.10", "@3sln/ngin": "^0.0.4", "esbuild": "^0.25.0", "fs-extra": "^11.3.2", "glob": "^10.3.10", "highlight.js": "^11.9.0", "marked": "^16.3.0", "yaml": "^2.9.1" }, "devDependencies": { "@web/dev-server": "^0.4.6", "happy-dom": "^18.0.1", "prettier": "^3.6.2", "vite": "^5.4.20" }, "peerDependencies": { "vite": ">=5" }, "optionalPeers": ["vite"], "bin": { "deck-build": "./bin/build.js", "deck-dev": "./bin/dev.js" } }],
 
     "@3sln/dodo": ["@3sln/dodo@0.0.10", "", {}, "sha512-bkZPspzCby0Q1PoRtXAoNcqQFTK0tNEddLxpGC1FaKXXfffUwJfkw1bXxWUxPQEtddlgW7r16c/myhcXnPHURg=="],
 
@@ -523,6 +523,8 @@
     "wrap-ansi-cjs": ["wrap-ansi@7.0.0", "", { "dependencies": { "ansi-styles": "^4.0.0", "string-width": "^4.1.0", "strip-ansi": "^6.0.0" } }, "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q=="],
 
     "ws": ["ws@7.5.13", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": "^5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-rsKI6xDBFVf4r/x8XyChGK04QR/XHroxs/jUcoWvtEZM8TPU/X/uIY9B1CsSzYws9ZJb/6bbBu7dPhFW00CAoA=="],
+
+    "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
 
     "ylru": ["ylru@1.4.0", "", {}, "sha512-2OQsPNEmBCvXuFlIni/a+Rn+R2pHW9INm0BxXJ4hVDA8TirqMj+J/Rp9ItLatT/5pZqWwefVrTQcHpixsxnVlA=="],
 

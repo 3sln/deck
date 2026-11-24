@@ -6,9 +6,9 @@
 Deck turns a directory of Markdown into a scalable, zero-config component
 playground and documentation site.
 
-It indexes your documentation in the browser, so a deck of a few thousand cards
-loads as fast as a deck of five: the shell and a precompiled search index arrive
-first, then cards, in whatever order the reader turns out to need them.
+Deck compiles a search index ahead of time and loads cards as readers open them.
+Use the stock UI, embed it in another site, or use the deck data in your own UI.
+You can combine projects, offer version selectors, and serve the same cards over MCP.
 
 [deck.webm](https://github.com/user-attachments/assets/cc127ba6-202c-47f0-a982-560e05f7574d)
 
@@ -16,6 +16,10 @@ first, then cards, in whatever order the reader turns out to need them.
 
 For a complete guide, API reference, and to see Deck in action, you can check out
 Deck's own [card Deck here](https://deck.3sln.com).
+
+The [configuration reference](deck/cards/configuration.md) covers branding,
+themes, and selectors for projects and versions. The [integration guide](deck/cards/integration.md)
+covers the headless API, embedding, and MCP.
 
 ## Quick Start
 
@@ -137,23 +141,25 @@ npx deck-build
 Writes a static site to `out/`, ready for any file host. The build:
 
 - bundles deck's app and every `<deck-demo>` module with esbuild;
-- precompiles a **search index** over the whole deck, which the browser downloads
-  before any card — so the first search covers everything, not just what has
-  finished loading;
+- writes `deck-manifest.json` and `deck-search-index.json` alongside the card
+  files for the stock UI, custom clients, and MCP;
 - writes `llms.txt`, `agents.md`, `agents.html`, `robots.txt` and — when `url`
   is configured — `sitemap.xml`, so a crawler or an agent that cannot run a
   single-page app can still read the whole deck;
-- emits a service worker and asset manifest for offline reading.
+- emits a service worker and asset manifest for the stock UI's offline shell.
+  Readers can save individual cards or entire projects for offline reading.
 
-### Loading order
+Set `build.ui` to `false` to build the deck data without the stock UI.
 
-A published deck decides what to fetch by priority rather than by order on disk:
+## Releasing Deck
 
-1. the precompiled search index, before any card;
-2. the card named by `?c=`, so a deep link opens immediately;
-3. cards matching the search on screen — including a search typed while the rest
-   of the deck is still downloading, which re-prioritises the queue in place;
-4. everything else, in the background.
+Increase the root `package.json` version and merge it to `main`. The release
+workflow runs the tests, publishes to npm, and creates a GitHub release for
+`v<version>`. Prereleases use npm's `next` tag.
+
+The workflow can use the `NPM_TOKEN` repository secret or npm trusted publishing.
+For trusted publishing, authorize `publish.yml` in the `@3sln/deck` npm package
+settings and enable direct `npm publish`. [npm trusted publishing setup](https://docs.npmjs.com/trusted-publishers/)
 
 ## License
 

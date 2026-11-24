@@ -14,14 +14,20 @@
 
 import {isDev} from './dev-mode.js';
 
-const CLIENT_PATH = '/@deck-dev/client.js';
+const CLIENT_PATH = './@deck-dev/client.js';
 
 const NO_CHANNEL = {kind: 'none', on: () => () => {}};
 
-export async function connectHmr({dev = isDev()} = {}) {
+export async function connectHmr({dev = isDev(), baseUrl = document.baseURI} = {}) {
   if (import.meta.hot) {
     const hot = import.meta.hot;
-    return {kind: 'vite', on: (event, listener) => hot.on(event, listener)};
+    return {
+      kind: 'vite',
+      on(event, listener) {
+        hot.on(event, listener);
+        return () => hot.off(event, listener);
+      },
+    };
   }
 
   if (!dev) return NO_CHANNEL;
@@ -29,7 +35,7 @@ export async function connectHmr({dev = isDev()} = {}) {
   try {
     // A computed specifier, so a bundler leaves it alone: this path only
     // exists while a dev server is answering for it.
-    const url = new URL(CLIENT_PATH, document.baseURI).href;
+    const url = new URL(CLIENT_PATH, baseUrl).href;
     const {onDeckEvent} = await import(/* @vite-ignore */ /* webpackIgnore: true */ url);
     return {kind: 'sse', on: onDeckEvent};
   } catch (err) {

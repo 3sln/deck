@@ -29,6 +29,10 @@ export default function deckPlugin() {
   return {
     name: 'vite-plugin-deck',
 
+    config() {
+      return {optimizeDeps: {exclude: ['@3sln/deck']}};
+    },
+
     resolveId(id) {
       if (id.startsWith(ESM_PREFIX) || id.startsWith(SRC_PREFIX)) {
         return id;
@@ -65,35 +69,47 @@ export default function deckPlugin() {
 
     async configureServer(server) {
       deck = await new DeckDev({root: resolvedConfig.root}).init();
+      const {base} = resolvedConfig;
 
-      server.watcher.on('all', (eventName, eventPath) => {
+      const update = (eventName, eventPath) => {
         const webPath = deck.webPathFor(path.resolve(eventPath));
-        if (!webPath || !deck.isCard(webPath)) return;
+        if (!webPath) return;
 
         switch (eventName) {
           case 'add':
           case 'change':
+            if (!deck.isCard(webPath)) return;
+            deck.invalidateArtifacts(webPath);
             server.ws.send({type: 'custom', event: CARD_CHANGED, data: {path: webPath}});
             break;
           case 'unlink':
+            if (!/\.(md|html)$/.test(webPath)) return;
+            deck.invalidateArtifacts(webPath);
             server.ws.send({type: 'custom', event: CARD_REMOVED, data: {path: webPath}});
             break;
         }
-      });
+      };
+      server.watcher.on('all', update);
+      server.httpServer?.once('close', () => server.watcher.off('all', update));
 
       server.middlewares.use(async (req, res, next) => {
-        if (new URL(req.url, 'http://localhost').pathname !== '/') {
-          next();
-          return;
-        }
+        if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+        const pathname = new URL(req.url, 'http://localhost').pathname;
+        if (!pathname.startsWith(base)) return next();
+        const route = '/' + pathname.slice(base.length);
         try {
-          // `@3sln/deck` rather than a resolved path: Vite resolves the bare
-          // specifier itself, which is also what puts the app through its
-          // dependency optimiser.
+          const artifact = await deck.artifactResponse(route);
+          if (artifact) {
+            res.statusCode = artifact.status ?? 200;
+            res.setHeader('Content-Type', artifact.type + '; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-store');
+            return res.end(req.method === 'HEAD' ? undefined : artifact.body);
+          }
+          if (route !== '/' || deck.config.ui === false) return next();
           const template = await deck.indexHtml({entryFile: '@3sln/deck'});
-          const html = await server.transformIndexHtml(req.url, template);
+          const html = await server.transformIndexHtml('/', template, req.url);
           res.setHeader('Content-Type', 'text/html');
-          res.end(html);
+          res.end(req.method === 'HEAD' ? undefined : html);
         } catch (err) {
           next(err);
         }

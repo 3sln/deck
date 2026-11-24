@@ -1,3 +1,7 @@
+---
+tags: [demos]
+---
+
 # The `<deck-demo>` Element
 
 The `<deck-demo>` custom element is the heart of Deck's interactive documentation. It allows you to embed live, stateful, and hot-reloading component demos directly in your Markdown files.

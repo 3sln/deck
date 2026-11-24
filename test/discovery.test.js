@@ -40,12 +40,26 @@ test('the sitemap lists the root and every card, at the URL that opens it', () =
   expect(xml.match(/<url>/g)).toHaveLength(3);
 });
 
+test('stock sitemap links use slugs and also open cards from a legacy manifest', () => {
+  const xml = sitemapXml({
+    url: 'https://deck.example.com/manual/',
+    cards: [{...cards[0], slug: 'reference/client'}, cards[1]],
+  });
+  const links = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(([, link]) => new URL(link));
+  expect(links.map(link => link.pathname)).toEqual(['/manual/', '/manual/', '/manual/']);
+  expect(links.map(link => link.searchParams.get('c'))).toEqual([
+    null,
+    'reference/client',
+    '/cards/a b.md',
+  ]);
+});
+
 test('llms.txt is a map of the deck, linking the Markdown rather than the app', () => {
   const txt = llmsTxt({
     title: 'My Deck',
     description: 'A deck about things.',
     url: 'https://deck.example.com',
-    cards,
+    cards: [{...cards[0], slug: 'reference/client'}, cards[1]],
   });
   expect(txt.startsWith('# My Deck')).toBe(true);
   expect(txt).toContain('> A deck about things.');
@@ -64,5 +78,15 @@ test('llms.txt falls back to relative links without a configured URL', () => {
 
 test('a card with no summary still gets a clean line', () => {
   const txt = llmsTxt({title: 'D', cards});
-  expect(txt).toContain('- [Spaced & Ampersanded](/cards/a b.md)\n');
+  expect(txt).toContain('- [Spaced & Ampersanded](/cards/a%20b.md)\n');
+});
+
+test('a data-only sitemap links to the raw card files', () => {
+  const sitemap = sitemapXml({
+    url: 'https://example.com/deck',
+    cards: [cards[0], {...cards[1], slug: 'spaced-and-ampersanded'}],
+    ui: false,
+  });
+  expect(sitemap).toContain('/deck/cards/a%20b.md');
+  expect(sitemap).not.toContain('?c=');
 });

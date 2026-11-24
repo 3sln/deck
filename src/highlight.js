@@ -31,10 +31,24 @@ export const stylesheet = createSheet`
   }
 
   pre {
-    border: 1px solid var(--border-color);
+    border: 1px solid var(--deck-border, var(--border-color));
     border-radius: 8px;
     padding: 1em;
     overflow-x: auto;
+  }
+`;
+
+export const viewerStylesheet = createSheet`
+  @scope (.deck-content) {
+    ${githubLight}
+
+    @media (prefers-color-scheme: dark) {
+      ${githubDark}
+    }
+
+    .hljs {
+      background: transparent;
+    }
   }
 `;
 

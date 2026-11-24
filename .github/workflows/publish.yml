@@ -1,75 +1,105 @@
-name: Publish to npm
-
-# Publishing a release (draft or otherwise) creates its tag and publishes the
-# package. Tests run first, so a red build cannot reach the registry.
-#
-# Requires an `NPM_TOKEN` repository secret — an npm automation token with
-# publish rights on the @3sln scope.
+name: Release Deck
 
 on:
-  release:
-    types:
-      - published
+  push:
+    branches: [main]
+    paths: [package.json]
+
+concurrency:
+  group: deck-release
+  queue: max
 
 permissions:
   contents: read
-  # Required for npm provenance. Drop this, and the --provenance flag below,
-  # if the repository is ever made private: provenance only works for packages
-  # published from a public repository.
-  id-token: write
-
-concurrency:
-  group: publish-${{ github.event.release.tag_name }}
-  cancel-in-progress: false
 
 jobs:
-  publish:
+  version:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
     steps:
-      - name: Checkout the released tag
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v1
-
-      - name: Check the tag matches package.json
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - name: Check for a package version bump
+        id: bump
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::Release tag $TAG does not match package.json version $version."
-            echo 'Publishing would ship something other than what the release names.'
+          if [[ "$BEFORE" == 0000000000000000000000000000000000000000 ]]; then
+            exit 0
+          fi
+          git show "$BEFORE:package.json" | bun -e '
+            const previous = JSON.parse(await Bun.stdin.text()).version;
+            const {version} = await Bun.file("package.json").json();
+            if (!/^[0-9A-Za-z.+-]+$/.test(version)) throw new Error("Invalid package version");
+            if (Bun.semver.order(version, previous) > 0) console.log(`version=${version}`);
+          ' >> "$GITHUB_OUTPUT"
+        shell: bash
+
+  release:
+    needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@v2
+      - name: Verify the release tag
+        run: |
+          ref="refs/tags/v$VERSION"
+          if git show-ref --verify --quiet "$ref" && [[ "$(git rev-parse "$ref^{commit}")" != "$GITHUB_SHA" ]]; then
+            echo "::error::Tag v$VERSION points to a different commit"
             exit 1
           fi
-          echo "$TAG matches package.json."
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
       - name: Test
         run: bun test
-
-      - name: Show what will be published
-        run: npm pack --dry-run
-
-      - name: Publish
-        run: npm publish --access public --provenance
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Summarise
-        env:
-          TAG: ${{ github.event.release.tag_name }}
         run: |
-          version="$(node -p "require('./package.json').version")"
-          echo "Published @3sln/deck@$version from $TAG." >> "$GITHUB_STEP_SUMMARY"
+          pack_json="$RUNNER_TEMP/deck-pack.json"
+          npm pack --json --pack-destination "$RUNNER_TEMP" > "$pack_json"
+          package=$(node -p 'require("./package.json").name')
+          if published=$(npm view "$package@$VERSION" dist.integrity --json); then
+            expected=$(node -p 'JSON.stringify(require(process.argv[1])[0].integrity)' "$pack_json")
+            if [[ "$published" != "$expected" ]]; then
+              echo "::error::$package@$VERSION exists on npm with different content"
+              exit 1
+            fi
+          else
+            tarball=$(node -p 'require(process.argv[1])[0].filename' "$pack_json")
+            dist_tag=latest
+            if [[ "${VERSION%%+*}" == *-* ]]; then dist_tag=next; fi
+            npm publish "$RUNNER_TEMP/$tarball" --access public --provenance --tag "$dist_tag"
+          fi
+      - name: Publish GitHub release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$VERSION"
+          flags=(--target "$GITHUB_SHA")
+          if [[ "${VERSION%%+*}" == *-* ]]; then flags+=(--prerelease); fi
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft); then
+            if [[ "$draft" == true ]]; then gh release edit "$tag" --draft=false "${flags[@]}"; fi
+          else
+            gh release create "$tag" --title "$tag" --generate-notes "${flags[@]}"
+          fi
+          echo "Released $tag to GitHub and npm." >> "$GITHUB_STEP_SUMMARY"

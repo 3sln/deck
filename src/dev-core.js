@@ -35,6 +35,14 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {loadDeckConfig, getCardFiles, sha256, getHtmlTemplate, toWebPath} from './config.js';
+import {
+  CARD_PREFIX,
+  MANIFEST_FILE,
+  createArtifacts,
+  describeCard,
+  encodePath,
+} from './artifacts.js';
+import {INDEX_FILE} from './search-index.js';
 
 export const EVENTS_PATH = '/@deck-dev/events';
 export const CLIENT_PATH = '/@deck-dev/client.js';
@@ -62,6 +70,14 @@ export const CARD_CHANGED = 'deck:card-changed';
 export const CARD_REMOVED = 'deck:card-removed';
 export const MODULE_CHANGED = 'deck:module-changed';
 export const SOURCE_CHANGED = 'deck:source-changed';
+
+export function isArtifactPath(pathname) {
+  return (
+    pathname === '/' + MANIFEST_FILE ||
+    pathname === '/' + INDEX_FILE ||
+    pathname.startsWith(CARD_PREFIX)
+  );
+}
 
 /** Recognises a request for one of the generated modules. */
 export function parseVirtualUrl(url) {
@@ -449,6 +465,8 @@ export class DeckDev {
   #root;
   #config = null;
   #mode;
+  #artifacts;
+  #cardEntries = new Map();
 
   constructor({root, mode = 'dev'}) {
     this.#root = root;
@@ -487,6 +505,63 @@ export class DeckDev {
     return getCardFiles(this.#root, this.config).some(file => toWebPath(file) === webPath);
   }
 
+  invalidateArtifacts(webPath) {
+    this.#artifacts = undefined;
+    if (webPath) this.#cardEntries.delete(webPath);
+    else this.#cardEntries.clear();
+  }
+
+  hasCachedCardsUnder(webPath) {
+    const prefix = webPath + '/';
+    return [...this.#cardEntries.keys()].some(cardPath => cardPath.startsWith(prefix));
+  }
+
+  #describe(file) {
+    const webPath = toWebPath(file);
+    if (!this.#cardEntries.has(webPath)) {
+      const entry = this.readSource(webPath).then(content =>
+        describeCard(file, content, '.' + CARD_PREFIX + encodePath(file)),
+      );
+      this.#cardEntries.set(webPath, entry);
+      entry.catch(() => {
+        if (this.#cardEntries.get(webPath) === entry) this.#cardEntries.delete(webPath);
+      });
+    }
+    return this.#cardEntries.get(webPath);
+  }
+
+  async artifactResponse(pathname) {
+    if (pathname.startsWith(CARD_PREFIX)) {
+      let webPath;
+      try {
+        webPath = '/' + decodeURIComponent(pathname.slice(CARD_PREFIX.length));
+      } catch {
+        return {body: 'Invalid card path', type: 'text/plain', status: 400};
+      }
+      if (this.isCard(webPath)) {
+        return {body: await this.readSource(webPath), type: 'text/plain'};
+      }
+      return {body: 'Card not found', type: 'text/plain', status: 404};
+    }
+    if (!isArtifactPath(pathname)) return undefined;
+    if (!this.#artifacts) {
+      const pending = Promise.all(
+        getCardFiles(this.#root, this.config)
+          .sort()
+          .map(file => this.#describe(file)),
+      ).then(cards => createArtifacts(cards, this.config, {dev: true}));
+      this.#artifacts = pending;
+      pending.catch(() => {
+        if (this.#artifacts === pending) this.invalidateArtifacts();
+      });
+    }
+    const {manifest, index} = await this.#artifacts;
+    return {
+      body: JSON.stringify(pathname === '/' + MANIFEST_FILE ? manifest : index),
+      type: 'application/json',
+    };
+  }
+
   /** The web path for an absolute file path, or null if it is outside the deck. */
   webPathFor(absolutePath) {
     const relative = path.relative(this.#root, absolutePath);
@@ -497,18 +572,9 @@ export class DeckDev {
   async indexHtml({entryFile, headExtra = ''} = {}) {
     const config = this.config;
     return getHtmlTemplate({
-      title: config.title,
-      description: config.description,
-      importMap: config.importMap,
-      initialCardsData: await this.cardManifest(),
-      pinnedCardPaths: config.pinned,
+      ...config,
+      manifestUrl: './' + MANIFEST_FILE,
       entryFile,
-      favicon: config.favicon,
-      scripts: config.scripts,
-      stylesheets: config.stylesheets,
-      // Dev has no precompiled index: the deck is being edited, and an index
-      // built a moment ago already describes the previous version.
-      searchIndexUrl: null,
       dev: true,
       headExtra,
     });
@@ -557,7 +623,17 @@ export function watchDeck(deck, {onEvent, debounceMs = 40}) {
       if (!webPath) continue;
 
       const exists = nodeFs.existsSync(absolutePath);
+      if (
+        kind === 'rename' &&
+        (nodeFs.statSync(absolutePath, {throwIfNoEntry: false})?.isDirectory() ||
+          deck.hasCachedCardsUnder(webPath))
+      ) {
+        deck.invalidateArtifacts();
+        onEvent(CARD_CHANGED, {path: webPath});
+        continue;
+      }
       if (deck.isCard(webPath) || (!exists && /\.(md|html)$/.test(webPath))) {
+        deck.invalidateArtifacts(webPath);
         onEvent(exists ? CARD_CHANGED : CARD_REMOVED, {path: webPath});
         continue;
       }
@@ -569,7 +645,6 @@ export function watchDeck(deck, {onEvent, debounceMs = 40}) {
       } catch {
         // Raced with a delete; the module event above is still worth sending.
       }
-      void kind;
     }
   };
 

@@ -71,6 +71,11 @@ export default function deckPlugin() {
     },
 
     async serve(context) {
+      const artifact = await deck.artifactResponse(context.path);
+      if (artifact) {
+        if (artifact.status) context.throw(artifact.status, artifact.body);
+        return {...artifact, headers: {'Cache-Control': 'no-store'}};
+      }
       if (context.path === CLIENT_PATH) {
         return {body: clientModule(), type: 'js'};
       }
@@ -99,7 +104,7 @@ export default function deckPlugin() {
         return {body: nativeSrcModule(virtual.target, text), type: 'js'};
       }
 
-      if (context.path === '/' || context.path === '/index.html') {
+      if (deck.config.ui !== false && (context.path === '/' || context.path === '/index.html')) {
         return {body: await deck.indexHtml({entryFile: APP_PATH}), type: 'html'};
       }
 

@@ -1,11 +1,8 @@
 /**
  * Reading a card's title, summary and plain text on the *server*.
  *
- * The browser does this with `DOMParser` (see `transformCard` in `state.js`);
- * the build cannot, so this arrives at the same three answers from marked's
- * token stream instead. They have to agree — the precompiled index is built
- * here and searched against titles the browser derived there — so the rules are
- * stated once, in both places, in the same words:
+ * The build and dev servers use marked's token stream to extract searchable
+ * text and card metadata without a browser:
  *
  *   - the title is the first level-one heading, falling back to the file name;
  *   - the summary is the first paragraph;
@@ -14,8 +11,7 @@
  * Inline tokens are concatenated and blocks are separated, because that is what
  * `textContent` does. Joining everything with spaces instead is close enough to
  * look right and wrong where it counts: it turns a heading like
- * ``The `<deck-demo>` Element`` into `The  <deck-demo>  Element`, and a title
- * the build agrees with the browser about becomes a title it does not.
+ * ``The `<deck-demo>` Element`` into `The  <deck-demo>  Element`.
  */
 
 import path from 'node:path';
@@ -78,8 +74,8 @@ function blockText(tokens, out = []) {
 }
 
 function fromHtml(file, source) {
-  const heading = source.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  const paragraph = source.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+  const heading = source.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
+  const paragraph = source.match(/<p\b[^>]*>([\s\S]*?)<\/p>/i);
   return {
     title: heading ? stripTags(heading[1]) : path.basename(file, path.extname(file)),
     summary: paragraph ? stripTags(paragraph[1]) : '',

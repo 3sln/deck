@@ -1,13 +1,6 @@
 /**
  * The one place deck decides what a word is and what a word is worth.
  *
- * Both indexers use it: the browser one in `db.js`, which indexes cards as they
- * arrive, and the build-time one in `bin/build.js`, which precompiles the whole
- * deck into a single downloadable index. They have to agree, or a search would
- * rank differently depending on whether the precompiled index happened to be
- * available — which is exactly the kind of difference that only ever shows up
- * in production.
- *
  * Deliberately free of both DOM and node APIs so it can be imported from
  * either side.
  */
@@ -36,7 +29,7 @@ const SUMMARY_BOOST = 3;
  * allowed to be empty, which is what indexing a card from its metadata alone
  * looks like.
  */
-export function scoreCard({title = '', summary = '', body = ''} = {}) {
+export function scoreCard({title = '', summary = '', body = '', tags = []} = {}) {
   const bodyTokens = tokenize(body);
   const titleWords = new Set(tokenize(title));
   const summaryWords = new Set(tokenize(summary));
@@ -50,6 +43,9 @@ export function scoreCard({title = '', summary = '', body = ''} = {}) {
   }
   for (const word of summaryWords) {
     scores.set(word, (scores.get(word) ?? 0) + SUMMARY_BOOST);
+  }
+  for (const word of new Set(tags.flatMap(tokenize))) {
+    scores.set(word, (scores.get(word) ?? 0) + TITLE_BOOST);
   }
   return scores;
 }

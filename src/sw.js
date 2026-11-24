@@ -1,39 +1,25 @@
-/**
- * Deck's service worker: an offline copy of a published deck.
- *
- * Strategy is network-first with a short leash. A deck is documentation, so
- * being a version behind is worse than being a moment slower — but only up to a
- * point, and past that point the cached copy wins. A cache-first worker would
- * serve yesterday's card to someone who just published a fix.
- */
+const scope = new URL(self.registration.scope);
+const cachePrefix = 'deck-shell:' + encodeURIComponent(scope.href) + ':';
+const cacheName = cachePrefix + 'DECK_SHELL_REVISION';
+const assets = new URL('assets/', scope).href;
+const shellManifest = new URL('asset-manifest.json', scope);
+const home = scope.href;
+const index = new URL('index.html', scope).href;
 
-const CACHE_NAME = 'deck-cache-v2';
-const NETWORK_TIMEOUT_MS = 400;
-
-const scoped = pathname => new URL(pathname, self.registration.scope).toString();
+async function shellFiles() {
+  const response = await fetch(shellManifest, {cache: 'no-store'});
+  if (!response.ok) throw new Error('Could not load the Deck application asset manifest');
+  const {files} = await response.json();
+  return files.map(file => new URL(file, scope).href);
+}
 
 self.addEventListener('install', event => {
   event.waitUntil(
     (async () => {
-      const cache = await caches.open(CACHE_NAME);
-      let assets;
-      try {
-        const response = await fetch(scoped('asset-manifest.json'), {cache: 'no-cache'});
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-        assets = [...(await response.json()).files, './'];
-      } catch (err) {
-        console.error('Deck: no asset manifest; offline mode is unavailable.', err);
-        return;
-      }
-
-      // One at a time rather than `cache.addAll`, which is all-or-nothing: a
-      // single asset that 404s would otherwise leave the deck with no offline
-      // copy at all, rather than an offline copy missing one file.
-      const results = await Promise.allSettled(assets.map(asset => cache.add(asset)));
-      const failed = results.filter(result => result.status === 'rejected').length;
-      if (failed > 0) {
-        console.warn(`Deck: ${failed} of ${assets.length} assets could not be cached.`);
-      }
+      const files = await shellFiles();
+      const cache = await caches.open(cacheName);
+      await cache.addAll(files.map(url => new Request(url, {cache: 'reload'})));
+      await self.skipWaiting();
     })(),
   );
 });
@@ -41,48 +27,45 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)));
+      await Promise.all(['deck-cache-v1', 'deck-cache-v2'].map(key => caches.delete(key)));
+      await Promise.all(
+        (await caches.keys())
+          .filter(key => key.startsWith(cachePrefix) && key !== cacheName)
+          .map(key => caches.delete(key)),
+      );
       await self.clients.claim();
     })(),
   );
 });
 
 self.addEventListener('fetch', event => {
-  const request = event.request;
-
-  // Only same-origin GETs are ours to answer. `cache.put` throws on anything
-  // else, and taking over a cross-origin request buys nothing.
-  if (request.method !== 'GET') return;
-  if (new URL(request.url).origin !== self.location.origin) return;
-
+  const {request} = event;
+  const url = new URL(request.url);
+  const page = url.origin + url.pathname;
+  if (request.mode !== 'navigate' || (page !== home && page !== index)) {
+    // The install step is the sole writer for preloaded UI assets.
+    if (request.method === 'GET' && url.href.startsWith(assets)) {
+      event.respondWith(
+        (async () => {
+          const cache = await caches.open(cacheName);
+          return (await cache.match(request)) ?? fetch(request);
+        })(),
+      );
+    }
+    return;
+  }
   event.respondWith(
     (async () => {
-      const cache = await caches.open(CACHE_NAME);
-
-      const network = fetch(request).then(response => {
-        if (response.ok && response.type === 'basic') {
-          // Cloned before the body is read: a response body can only be
-          // consumed once, and the caller is about to consume this one.
-          cache.put(request, response.clone()).catch(() => {});
-        }
-        return response;
-      });
-
-      const timeout = new Promise(resolve => setTimeout(() => resolve(null), NETWORK_TIMEOUT_MS));
-
+      const cache = await caches.open(cacheName);
       try {
-        const winner = await Promise.race([network, timeout]);
-        if (winner) return winner;
-      } catch {
-        // The network failed outright; fall through to the cache.
+        const response = await fetch(request);
+        if (!response.ok) throw new Error('Could not load Deck');
+        return response;
+      } catch (error) {
+        const saved = await cache.match(page);
+        if (saved) return saved;
+        throw error;
       }
-
-      const cached = await cache.match(request);
-      if (cached) return cached;
-
-      // Nothing cached: the slow network response is the only answer there is.
-      return await network;
     })(),
   );
 });
